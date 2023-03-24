@@ -40,21 +40,20 @@ C, F = mat(), mat()
 loss = scalar()
 
 n_sin_waves = 4
-weights = scalar()
-bias = scalar()
+# weights = scalar()
+# bias = scalar()
 x_avg = vec()
-
-actuation = scalar()
+#
+# actuation = scalar()
 actuation_omega = 20
 act_strength = 4
 
 
-
 def allocate_fields():
-    ti.root.dense(ti.ij, (n_actuators, n_sin_waves)).place(weights)
-    ti.root.dense(ti.i, n_actuators).place(bias)
-
-    ti.root.dense(ti.ij, (max_steps, n_actuators)).place(actuation)
+    # ti.root.dense(ti.ij, (n_actuators, n_sin_waves)).place(weights)
+    # ti.root.dense(ti.i, n_actuators).place(bias)
+    #
+    # ti.root.dense(ti.ij, (max_steps, n_actuators)).place(actuation)
     ti.root.dense(ti.i, n_particles).place(actuator_id, particle_type)
     ti.root.dense(ti.k, max_steps).dense(ti.l, n_particles).place(x, v, C, F)
     ti.root.dense(ti.ij, n_grid).place(grid_v_in, grid_m_in, grid_v_out)
@@ -84,17 +83,11 @@ def clear_particle_grad():
 
 
 @ti.kernel
-def clear_actuation_grad():
-    for t, i in actuation:
-        actuation[t, i] = 0.0
-
-
-@ti.kernel
 def p2g(f: ti.i32):
     for p in range(n_particles):
         base = ti.cast(x[f, p] * inv_dx - 0.5, ti.i32)
         fx = x[f, p] * inv_dx - ti.cast(base, ti.i32)
-        w = [0.5 * (1.5 - fx)**2, 0.75 - (fx - 1)**2, 0.5 * (fx - 0.5)**2]
+        w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
         new_F = (ti.Matrix.diag(dim=2, val=1) + dt * C[f, p]) @ F[f, p]
         J = (new_F).determinant()
         if particle_type[p] == 0:  # fluid
@@ -106,9 +99,8 @@ def p2g(f: ti.i32):
 
         act_id = actuator_id[p]
 
-        act = actuation[f, ti.max(0, act_id)] * act_strength
-        if act_id == -1:
-            act = 0.0
+        # act = actuation[f, ti.max(0, act_id)] * act_strength
+        act = 0.0
         # ti.print(act)
 
         A = ti.Matrix([[0.0, 0.0], [0.0, 1.0]]) * act
@@ -154,7 +146,7 @@ def grid_op():
             v_out[0] = 0
             v_out[1] = 0
             normal = ti.Vector([0.0, 1.0])
-            lsq = (normal**2).sum()
+            lsq = (normal ** 2).sum()
             if lsq > 0.5:
                 if ti.static(coeff < 0):
                     v_out[0] = 0
@@ -181,7 +173,7 @@ def g2p(f: ti.i32):
     for p in range(n_particles):
         base = ti.cast(x[f, p] * inv_dx - 0.5, ti.i32)
         fx = x[f, p] * inv_dx - ti.cast(base, real)
-        w = [0.5 * (1.5 - fx)**2, 0.75 - (fx - 1.0)**2, 0.5 * (fx - 0.5)**2]
+        w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1.0) ** 2, 0.5 * (fx - 0.5) ** 2]
         new_v = ti.Vector([0.0, 0.0])
         new_C = ti.Matrix([[0.0, 0.0], [0.0, 0.0]])
 
@@ -199,23 +191,12 @@ def g2p(f: ti.i32):
 
 
 @ti.kernel
-def compute_actuation(t: ti.i32):
-    for i in range(n_actuators):
-        act = 0.0
-        for j in ti.static(range(n_sin_waves)):
-            act += weights[i, j] * ti.sin(actuation_omega * t * dt +
-                                          2 * math.pi / n_sin_waves * j)
-        act += bias[i]
-        actuation[t, i] = ti.tanh(act)
-
-
-@ti.kernel
 def compute_x_avg():
     for i in range(n_particles):
         contrib = 0.0
         if particle_type[i] == 1:
             contrib = 1.0 / n_solid_particles
-        x_avg[None].atomic_add(contrib * x[steps - 1, i])
+        ti.atomic_add(x_avg[None], contrib * x[steps - 1, i])
 
 
 @ti.kernel
@@ -227,7 +208,6 @@ def compute_loss():
 @ti.ad.grad_replaced
 def advance(s):
     clear_grid()
-    compute_actuation(s)
     p2g(s)
     grid_op()
     g2p(s)
@@ -242,7 +222,6 @@ def advance_grad(s):
     g2p.grad(s)
     grid_op.grad()
     p2g.grad(s)
-    compute_actuation.grad(s)
 
 
 def forward(total_steps=steps):
@@ -299,24 +278,10 @@ class Scene:
         n_actuators = n_act
 
 
-def fish(scene):
-    scene.add_rect(0.025, 0.025, 0.95, 0.1, -1, ptype=0)
-    scene.add_rect(0.1, 0.2, 0.15, 0.05, -1)
-    scene.add_rect(0.1, 0.15, 0.025, 0.05, 0)
-    scene.add_rect(0.125, 0.15, 0.025, 0.05, 1)
-    scene.add_rect(0.2, 0.15, 0.025, 0.05, 2)
-    scene.add_rect(0.225, 0.15, 0.025, 0.05, 3)
-    scene.set_n_actuators(4)
-
-
 def robot(scene):
-    scene.set_offset(0.1, 0.03)
-    scene.add_rect(0.0, 0.1, 0.3, 0.1, -1)
-    scene.add_rect(0.0, 0.0, 0.05, 0.1, 0)
-    scene.add_rect(0.05, 0.0, 0.05, 0.1, 1)
-    scene.add_rect(0.2, 0.0, 0.05, 0.1, 2)
-    scene.add_rect(0.25, 0.0, 0.05, 0.1, 3)
-    scene.set_n_actuators(4)
+    scene.set_offset(0.1, 0.01)
+    scene.add_rect(0.0, 0.02, 0.3, 0.1, -1, ptype=1)
+    scene.set_n_actuators(0)
 
 
 gui = ti.GUI("Differentiable MPM", (640, 640), background_color=0xFFFFFF)
@@ -326,12 +291,8 @@ def visualize(s, folder):
     aid = actuator_id.to_numpy()
     colors = np.empty(shape=n_particles, dtype=np.uint32)
     particles = x.to_numpy()[s]
-    actuation_ = actuation.to_numpy()
     for i in range(n_particles):
         color = 0x111111
-        if aid[i] != -1:
-            act = actuation_[s - 1, int(aid[i])]
-            color = ti.rgb_to_hex((0.5 - act, 0.5 - abs(act), 0.5 + act))
         colors[i] = color
     gui.circles(pos=particles, color=colors, radius=1.5)
     gui.line((0.05, 0.02), (0.95, 0.02), radius=3, color=0x0)
@@ -351,43 +312,38 @@ def main():
     scene.finalize()
     allocate_fields()
 
-    for i in range(n_actuators):
-        for j in range(n_sin_waves):
-            weights[i, j] = np.random.randn() * 0.01
-
     for i in range(scene.n_particles):
         x[0, i] = scene.x[i]
         F[0, i] = [[1, 0], [0, 1]]
         actuator_id[i] = scene.actuator_id[i]
         particle_type[i] = scene.particle_type[i]
 
-    losses = []
-    for iter in range(options.iters):
-        with ti.ad.Tape(loss):
-            forward()
-        l = loss[None]
-        losses.append(l)
-        print('i=', iter, 'loss=', l)
-        learning_rate = 0.1
+    # visualize
+    forward(1500)
+    for s in range(15, 1500, 16):
+        visualize(s, 'diffmpm/iter{:03d}/'.format(0))
 
-        for i in range(n_actuators):
-            for j in range(n_sin_waves):
-                # print(weights.grad[i, j])
-                weights[i, j] -= learning_rate * weights.grad[i, j]
-            bias[i] -= learning_rate * bias.grad[i]
-
-        if iter % 10 == 0:
-            # visualize
-            forward(1500)
-            for s in range(15, 1500, 16):
-                visualize(s, 'diffmpm/iter{:03d}/'.format(iter))
-
-    # ti.profiler_print()
-    plt.title("Optimization of Initial Velocity")
-    plt.ylabel("Loss")
-    plt.xlabel("Gradient Descent Iterations")
-    plt.plot(losses)
-    plt.show()
+    # losses = []
+    # for iter in range(options.iters):
+    #     with ti.ad.Tape(loss):
+    #         forward()
+    #     l = loss[None]
+    #     losses.append(l)
+    #     print('i=', iter, 'loss=', l)
+    #     learning_rate = 0.1
+    #
+    #     if iter % 10 == 0:
+    #         # visualize
+    #         forward(1500)
+    #         for s in range(15, 1500, 16):
+    #             visualize(s, 'diffmpm/iter{:03d}/'.format(iter))
+    #
+    # # ti.profiler_print()
+    # plt.title("Optimization of Initial Velocity")
+    # plt.ylabel("Loss")
+    # plt.xlabel("Gradient Descent Iterations")
+    # plt.plot(losses)
+    # plt.show()
 
 
 if __name__ == '__main__':
