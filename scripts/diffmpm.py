@@ -126,12 +126,13 @@ def p2g(f: ti.i32):
                 grid_m_in[base + offset] += weight * mass
 
 
-bound = 3
+bound = 4
 coeff = 0.5
 
 
 @ti.kernel
 def grid_op():
+    # TODO: Add rigid body collision.
     for i, j in grid_m_in:
         inv_m = 1 / (grid_m_in[i, j] + 1e-10)
         v_out = inv_m * grid_v_in[i, j]
@@ -145,22 +146,22 @@ def grid_op():
         if j < bound and v_out[1] < 0:
             v_out[0] = 0
             v_out[1] = 0
-            normal = ti.Vector([0.0, 1.0])
-            lsq = (normal ** 2).sum()
-            if lsq > 0.5:
-                if ti.static(coeff < 0):
-                    v_out[0] = 0
-                    v_out[1] = 0
-                else:
-                    lin = v_out.dot(normal)
-                    if lin < 0:
-                        vit = v_out - lin * normal
-                        lit = vit.norm() + 1e-10
-                        if lit + coeff * lin <= 0:
-                            v_out[0] = 0
-                            v_out[1] = 0
-                        else:
-                            v_out = (1 + coeff * lin / lit) * vit
+            # normal = ti.Vector([0.0, 1.0])
+            # lsq = (normal ** 2).sum()
+            # if lsq > 0.5:
+            #     if ti.static(coeff < 0):
+            #         v_out[0] = 0
+            #         v_out[1] = 0
+            #     else:
+            #         lin = v_out.dot(normal)
+            #         if lin < 0:
+            #             vit = v_out - lin * normal
+            #             lit = vit.norm() + 1e-10
+            #             if lit + coeff * lin <= 0:
+            #                 v_out[0] = 0
+            #                 v_out[1] = 0
+            #             else:
+            #                 v_out = (1 + coeff * lin / lit) * vit
         if j > n_grid - bound and v_out[1] > 0:
             v_out[0] = 0
             v_out[1] = 0
@@ -279,8 +280,8 @@ class Scene:
 
 
 def robot(scene):
-    scene.set_offset(0.1, 0.01)
-    scene.add_rect(0.0, 0.02, 0.3, 0.1, -1, ptype=1)
+    scene.set_offset(0.5 - 0.15, 0.0)
+    scene.add_rect(0.0, 0.019, 0.3, 0.1, -1, ptype=1)
     scene.set_n_actuators(0)
 
 
