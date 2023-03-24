@@ -26,8 +26,8 @@ steps = 1024
 gravity = 3.8
 target = [0.8, 0.2]
 
-sphere_start_pos = [0.5, 0.5]
-sphere_end_pos = [0.5, 0.2]
+sphere_start_pos = [0.5, 0.2]
+sphere_end_pos = [0.5, 0.15]
 sphere_radius = 0.05
 
 scalar = lambda: ti.field(dtype=real)
@@ -40,6 +40,7 @@ x, v = vec(), vec()
 grid_v_in, grid_m_in = vec(), scalar()
 grid_v_out = vec()
 C, F = mat(), mat()
+sphere_pos = vec()
 
 loss = scalar()
 
@@ -60,13 +61,10 @@ def sphere_position(s, total_steps):
 
 
 def allocate_fields():
-    # ti.root.dense(ti.ij, (n_actuators, n_sin_waves)).place(weights)
-    # ti.root.dense(ti.i, n_actuators).place(bias)
-    #
-    # ti.root.dense(ti.ij, (max_steps, n_actuators)).place(actuation)
     ti.root.dense(ti.i, n_particles).place(actuator_id, particle_type)
     ti.root.dense(ti.k, max_steps).dense(ti.l, n_particles).place(x, v, C, F)
     ti.root.dense(ti.ij, n_grid).place(grid_v_in, grid_m_in, grid_v_out)
+    ti.root.dense(ti.i, max_steps).place(sphere_pos)
     ti.root.place(loss, x_avg)
 
     ti.root.lazy_grad()
@@ -138,6 +136,56 @@ def p2g(f: ti.i32):
 
 bound = 4
 coeff = 0.5
+softness = 666.0  # From PlasticineLab
+friction = 2.0  # ?
+
+
+@ti.func
+def sdf(f, grid_pos):
+    grid_xy = ti.Vector([grid_pos[0] * dx, grid_pos[1] * dx])
+    return 0.0
+
+
+@ti.func
+def normal(f, grid_pos):
+    return ti.Vector([0.0, 0.0])
+
+
+@ti.func
+def collider_v(f, grid_pos, dt):
+    return ti.Vector([0.0, 0.0])
+
+
+@ti.func
+def length(x):
+    return ti.sqrt(x.dot(x) + 1e-8)
+
+
+@ti.func
+def collide(f, grid_pos, v_out, dt):
+    dist = sdf(f, grid_pos)
+    influence = min(ti.exp(-dist * softness), 1)
+    if (softness > 0 and influence > 0.1) or dist <= 0:
+        D = normal(f, grid_pos)
+        collider_v_at_grid = collider_v(f, grid_pos, dt)
+
+        input_v = v_out - collider_v_at_grid
+        normal_component = input_v.dot(D)
+
+        grid_v_t = input_v - min(normal_component, 0) * D
+
+        grid_v_t_norm = length(grid_v_t)
+        grid_v_t_friction = grid_v_t / grid_v_t_norm * max(0, grid_v_t_norm + normal_component * friction)
+        flag = ti.cast(normal_component < 0 and ti.sqrt(grid_v_t.dot(grid_v_t)) > 1e-30, ti.f64)
+        grid_v_t = grid_v_t_friction * flag + grid_v_t * (1 - flag)
+        v_out = collider_v_at_grid + input_v * (1 - influence) + grid_v_t * influence
+
+        # print(self.position[f], f)
+        # print(grid_pos, collider_v, v_out, dist, self.friction, D)
+        # if v_out[1] > 1000:
+        # print(input_v, collider_v_at_grid, normal_component, D)
+
+    return v_out
 
 
 @ti.kernel
@@ -156,22 +204,22 @@ def grid_op():
         if j < bound and v_out[1] < 0:
             v_out[0] = 0
             v_out[1] = 0
-            # normal = ti.Vector([0.0, 1.0])
-            # lsq = (normal ** 2).sum()
-            # if lsq > 0.5:
-            #     if ti.static(coeff < 0):
-            #         v_out[0] = 0
-            #         v_out[1] = 0
-            #     else:
-            #         lin = v_out.dot(normal)
-            #         if lin < 0:
-            #             vit = v_out - lin * normal
-            #             lit = vit.norm() + 1e-10
-            #             if lit + coeff * lin <= 0:
-            #                 v_out[0] = 0
-            #                 v_out[1] = 0
-            #             else:
-            #                 v_out = (1 + coeff * lin / lit) * vit
+            normal = ti.Vector([0.0, 1.0])
+            lsq = (normal ** 2).sum()
+            if lsq > 0.5:
+                if ti.static(coeff < 0):
+                    v_out[0] = 0
+                    v_out[1] = 0
+                else:  # Friction
+                    lin = v_out.dot(normal)
+                    if lin < 0:
+                        vit = v_out - lin * normal
+                        lit = vit.norm() + 1e-10
+                        if lit + coeff * lin <= 0:
+                            v_out[0] = 0
+                            v_out[1] = 0
+                        else:
+                            v_out = (1 + coeff * lin / lit) * vit
         if j > n_grid - bound and v_out[1] > 0:
             v_out[0] = 0
             v_out[1] = 0
@@ -301,14 +349,14 @@ gui = ti.GUI("Differentiable MPM", (640, 640), background_color=0xFFFFFF)
 def visualize(s, folder):
     colors = np.empty(shape=n_particles, dtype=np.uint32)
     particles = x.to_numpy()[s]
-    sphere_pos = sphere_position(s, steps)
+    sphere_pos_ = sphere_pos.to_numpy()[s]
     for i in range(n_particles):
         color = 0x111111
         colors[i] = color
     gui.circles(pos=particles, color=colors, radius=1.5)
     gui.line((0.05, 0.02), (0.95, 0.02), radius=3, color=0x0)
     radius_in_pixels = sphere_radius * 640.0
-    gui.circle(sphere_pos, color=0x0, radius=radius_in_pixels)
+    gui.circle(sphere_pos_, color=0x0, radius=radius_in_pixels)
 
     os.makedirs(folder, exist_ok=True)
     gui.show(f'{folder}/{s:04d}.png')
@@ -331,9 +379,12 @@ def main():
         actuator_id[i] = scene.actuator_id[i]
         particle_type[i] = scene.particle_type[i]
 
+    for i in range(max_steps):
+        sphere_pos[i] = sphere_position(i, max_steps)
+
     # visualize
-    forward(steps)
-    for s in range(15, steps, 16):
+    forward(max_steps)
+    for s in range(15, max_steps, 16):
         visualize(s, 'diffmpm/iter{:03d}/'.format(0))
 
     # losses = []
