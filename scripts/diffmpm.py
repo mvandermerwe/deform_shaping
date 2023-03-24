@@ -26,6 +26,10 @@ steps = 1024
 gravity = 3.8
 target = [0.8, 0.2]
 
+sphere_start_pos = [0.5, 0.5]
+sphere_end_pos = [0.5, 0.2]
+sphere_radius = 0.05
+
 scalar = lambda: ti.field(dtype=real)
 vec = lambda: ti.Vector.field(dim, dtype=real)
 mat = lambda: ti.Matrix.field(dim, dim, dtype=real)
@@ -47,6 +51,12 @@ x_avg = vec()
 # actuation = scalar()
 actuation_omega = 20
 act_strength = 4
+
+
+def sphere_position(s, total_steps):
+    sphere_x = sphere_start_pos[0] * (1 - (s / total_steps)) + sphere_end_pos[0] * (s / total_steps)
+    sphere_y = sphere_start_pos[1] * (1 - (s / total_steps)) + sphere_end_pos[1] * (s / total_steps)
+    return [sphere_x, sphere_y]
 
 
 def allocate_fields():
@@ -289,14 +299,16 @@ gui = ti.GUI("Differentiable MPM", (640, 640), background_color=0xFFFFFF)
 
 
 def visualize(s, folder):
-    aid = actuator_id.to_numpy()
     colors = np.empty(shape=n_particles, dtype=np.uint32)
     particles = x.to_numpy()[s]
+    sphere_pos = sphere_position(s, steps)
     for i in range(n_particles):
         color = 0x111111
         colors[i] = color
     gui.circles(pos=particles, color=colors, radius=1.5)
     gui.line((0.05, 0.02), (0.95, 0.02), radius=3, color=0x0)
+    radius_in_pixels = sphere_radius * 640.0
+    gui.circle(sphere_pos, color=0x0, radius=radius_in_pixels)
 
     os.makedirs(folder, exist_ok=True)
     gui.show(f'{folder}/{s:04d}.png')
@@ -320,8 +332,8 @@ def main():
         particle_type[i] = scene.particle_type[i]
 
     # visualize
-    forward(1500)
-    for s in range(15, 1500, 16):
+    forward(steps)
+    for s in range(15, steps, 16):
         visualize(s, 'diffmpm/iter{:03d}/'.format(0))
 
     # losses = []
