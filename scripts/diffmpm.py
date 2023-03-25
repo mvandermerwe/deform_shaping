@@ -23,7 +23,7 @@ mu = E
 la = E
 max_steps = 2048
 steps = 1024
-gravity = 3.8
+gravity = 0.0
 target = [0.8, 0.2]
 
 sphere_start_pos = [0.5, 0.2]
@@ -41,6 +41,7 @@ grid_v_in, grid_m_in = vec(), scalar()
 grid_v_out = vec()
 C, F = mat(), mat()
 sphere_pos = vec()
+sphere_vel = vec()
 
 loss = scalar()
 
@@ -65,6 +66,7 @@ def allocate_fields():
     ti.root.dense(ti.k, max_steps).dense(ti.l, n_particles).place(x, v, C, F)
     ti.root.dense(ti.ij, n_grid).place(grid_v_in, grid_m_in, grid_v_out)
     ti.root.dense(ti.i, max_steps).place(sphere_pos)
+    ti.root.dense(ti.i, max_steps).place(sphere_vel)
     ti.root.place(loss, x_avg)
 
     ti.root.lazy_grad()
@@ -134,7 +136,7 @@ def p2g(f: ti.i32):
                 grid_m_in[base + offset] += weight * mass
 
 
-bound = 4
+bound = 3
 coeff = 0.5
 softness = 666.0  # From PlasticineLab
 friction = 2.0  # ?
@@ -143,28 +145,41 @@ friction = 2.0  # ?
 @ti.func
 def sdf(f, grid_pos):
     grid_xy = ti.Vector([grid_pos[0] * dx, grid_pos[1] * dx])
-    return 0.0
+    sphere_xy = sphere_pos[f]
+    return length(grid_xy - sphere_xy) - sphere_radius
 
 
 @ti.func
 def normal(f, grid_pos):
-    return ti.Vector([0.0, 0.0])
+    grid_xy = ti.Vector([grid_pos[0] * dx, grid_pos[1] * dx])
+    sphere_xy = sphere_pos[f]
+    return (grid_xy - sphere_xy) / length(grid_xy - sphere_xy)
 
 
 @ti.func
-def collider_v(f, grid_pos, dt):
-    return ti.Vector([0.0, 0.0])
+def collider_v(f, grid_pos, dt_):
+    grid_xy = ti.Vector([grid_pos[0] * dx, grid_pos[1] * dx])
+    sphere_xy = sphere_pos[f]
+    sphere_vel_ = sphere_vel[f]
+
+    rel_pos = grid_xy - sphere_xy
+
+    # next_sphere_xy = sphere_xy + (sphere_vel_ * dt_)
+    # next_rel_pos = next_sphere_xy + rel_pos
+    # return (next_rel_pos - grid_xy) / dt_
+
+    return sphere_vel_ / dt_
 
 
 @ti.func
-def length(x):
-    return ti.sqrt(x.dot(x) + 1e-8)
+def length(x_):
+    return ti.sqrt(x_.dot(x_) + 1e-8)
 
 
 @ti.func
 def collide(f, grid_pos, v_out, dt):
     dist = sdf(f, grid_pos)
-    influence = min(ti.exp(-dist * softness), 1)
+    influence = ti.min(ti.exp(-dist * softness), 1)
     if (softness > 0 and influence > 0.1) or dist <= 0:
         D = normal(f, grid_pos)
         collider_v_at_grid = collider_v(f, grid_pos, dt)
@@ -172,11 +187,11 @@ def collide(f, grid_pos, v_out, dt):
         input_v = v_out - collider_v_at_grid
         normal_component = input_v.dot(D)
 
-        grid_v_t = input_v - min(normal_component, 0) * D
+        grid_v_t = input_v - ti.min(normal_component, 0) * D
 
         grid_v_t_norm = length(grid_v_t)
-        grid_v_t_friction = grid_v_t / grid_v_t_norm * max(0, grid_v_t_norm + normal_component * friction)
-        flag = ti.cast(normal_component < 0 and ti.sqrt(grid_v_t.dot(grid_v_t)) > 1e-30, ti.f64)
+        grid_v_t_friction = grid_v_t / grid_v_t_norm * ti.max(0, grid_v_t_norm + normal_component * friction)
+        flag = ti.cast(normal_component < 0 and ti.sqrt(grid_v_t.dot(grid_v_t)) > 1e-30, ti.f32)
         grid_v_t = grid_v_t_friction * flag + grid_v_t * (1 - flag)
         v_out = collider_v_at_grid + input_v * (1 - influence) + grid_v_t * influence
 
@@ -189,12 +204,15 @@ def collide(f, grid_pos, v_out, dt):
 
 
 @ti.kernel
-def grid_op():
+def grid_op(s: ti.i32):
     # TODO: Add rigid body collision.
     for i, j in grid_m_in:
         inv_m = 1 / (grid_m_in[i, j] + 1e-10)
         v_out = inv_m * grid_v_in[i, j]
         v_out[1] -= dt * gravity
+
+        v_out = collide(s, ti.Vector([i, j]), v_out, dt)
+
         if i < bound and v_out[0] < 0:
             v_out[0] = 0
             v_out[1] = 0
@@ -268,7 +286,7 @@ def compute_loss():
 def advance(s):
     clear_grid()
     p2g(s)
-    grid_op()
+    grid_op(s)
     g2p(s)
 
 
@@ -276,10 +294,10 @@ def advance(s):
 def advance_grad(s):
     clear_grid()
     p2g(s)
-    grid_op()
+    grid_op(s)
 
     g2p.grad(s)
-    grid_op.grad()
+    grid_op.grad(s)
     p2g.grad(s)
 
 
@@ -350,13 +368,13 @@ def visualize(s, folder):
     colors = np.empty(shape=n_particles, dtype=np.uint32)
     particles = x.to_numpy()[s]
     sphere_pos_ = sphere_pos.to_numpy()[s]
+    radius_in_pixels = sphere_radius * 640.0
+    gui.circle(sphere_pos_, color=0xFF0000, radius=radius_in_pixels)
     for i in range(n_particles):
         color = 0x111111
         colors[i] = color
     gui.circles(pos=particles, color=colors, radius=1.5)
     gui.line((0.05, 0.02), (0.95, 0.02), radius=3, color=0x0)
-    radius_in_pixels = sphere_radius * 640.0
-    gui.circle(sphere_pos_, color=0x0, radius=radius_in_pixels)
 
     os.makedirs(folder, exist_ok=True)
     gui.show(f'{folder}/{s:04d}.png')
@@ -381,6 +399,7 @@ def main():
 
     for i in range(max_steps):
         sphere_pos[i] = sphere_position(i, max_steps)
+        sphere_vel[i] = (np.array(sphere_end_pos) - np.array(sphere_start_pos)) / max_steps
 
     # visualize
     forward(max_steps)
