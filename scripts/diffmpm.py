@@ -26,8 +26,8 @@ steps = 1024
 gravity = 0.0
 target = [0.8, 0.2]
 
-sphere_start_pos = [0.5, 0.2]
-sphere_end_pos = [0.5, 0.15]
+sphere_start_pos = [0.4, 0.2]
+sphere_end_pos = [0.6, 0.15]
 sphere_radius = 0.05
 
 scalar = lambda: ti.field(dtype=real)
