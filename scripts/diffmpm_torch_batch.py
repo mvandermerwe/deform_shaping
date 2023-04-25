@@ -1,3 +1,5 @@
+import argparse
+
 import torch
 from matplotlib import pyplot as plt
 from tqdm import trange
@@ -43,14 +45,13 @@ class Scene:
         self.dtype = torch.float32
         self.device = torch.device("cpu")
 
-        self.sphere_start_pos = torch.tensor([0.5, 0.2], dtype=self.dtype, device=self.device)
-        self.sphere_end_pos = torch.tensor([0.5, 0.3], dtype=self.dtype, device=self.device)
+        self.sphere_start_pos = torch.tensor([0.4, 0.2], dtype=self.dtype, device=self.device)
+        self.sphere_end_pos = torch.tensor([0.6, 0.15], dtype=self.dtype, device=self.device)
 
         self.create_def_body()
         self.init_tensors()
         self.init_sphere_tensors()
         self.x[0] = self.x0
-        self.F[0] = torch.eye(dim, dtype=self.dtype, device=self.device).repeat(n_particles, 1, 1)
 
     def create_def_body(self):
         global n_particles
@@ -64,8 +65,8 @@ class Scene:
         for i in range(w_count):
             for j in range(h_count):
                 x.append([
-                    x_base + (i + 0.5) * real_dx + x_offset,
-                    y_base + (j + 0.5) * real_dy + y_offset
+                    x_base + (i + 0.5) * real_dx,
+                    y_base + (j + 0.5) * real_dy
                 ])
         self.x0 = torch.tensor(x, dtype=self.dtype, device=self.device)
         n_particles = self.x0.shape[0]
@@ -105,8 +106,8 @@ class Scene:
             r, s = utils.polar_decompose(new_F)
 
             mass = 1
-            cauchy = 2 * mu * (new_F - r) @ new_F.T + torch.eye(2, dtype=self.dtype, device=self.device) * (
-                    la * J * (J - 1))
+            cauchy = 2 * mu * (new_F - r) @ new_F.T + torch.diag(
+                torch.tensor([2, la * (J - 1) * J], dtype=self.dtype, device=self.device))
 
             stress = -(dt * p_vol * 4 * inv_dx * inv_dx) * cauchy
             affine = stress + mass * self.C[step, p]
@@ -119,6 +120,32 @@ class Scene:
                     self.grid_v_in[base[0] + i, base[1] + j] += weight * (mass * self.v[step, p] + affine @ dpos)
                     self.grid_m_in[base[0] + i, base[1] + j] += weight * mass
 
+    def p2g_batch(self, step):
+        base = (self.x[step] * inv_dx - 0.5).floor().int()
+        fx = self.x[step] * inv_dx - base.float()
+        w = [0.5 * torch.pow(1.5 - fx, 2), 0.75 - torch.pow(fx - 1, 2), 0.5 * torch.pow(fx - 0.5, 2)]
+
+        new_F = (torch.eye(dim, dtype=self.dtype, device=self.device) + dt * self.C[step]) @ self.F[step]
+        J = new_F.det()
+
+        self.F[step + 1] = new_F
+        r, s = utils.polar_decompose(new_F)
+
+        mass = 1
+        cauchy = 2 * mu * (new_F - r) @ new_F.T + torch.diag(
+            torch.tensor([2, la * (J - 1) * J], dtype=self.dtype, device=self.device))
+
+        stress = -(dt * p_vol * 4 * inv_dx * inv_dx) * cauchy
+        affine = stress + mass * self.C[step]
+
+        for i in range(3):
+            for j in range(3):
+                offset = torch.tensor([i, j], dtype=self.dtype, device=self.device)
+                dpos = (offset - fx) * dx
+                weight = w[i][0] * w[j][1]
+                self.grid_v_in[base[0] + i, base[1] + j] += weight * (mass * self.v[step] + affine @ dpos)
+                self.grid_m_in[base[0] + i, base[1] + j] += weight * mass
+
     def sdf(self, step, grid_pos):
         grid_xy = torch.tensor([grid_pos[0] * dx, grid_pos[1] * dx], dtype=self.dtype, device=self.device)
         sphere_xy = self.sphere_x[step]
@@ -130,6 +157,8 @@ class Scene:
         return (grid_xy - sphere_xy) / torch.norm(grid_xy - sphere_xy)
 
     def collider_v(self, step, grid_pos, dt_):
+        grid_xy = torch.tensor([grid_pos[0] * dx, grid_pos[1] * dx], dtype=self.dtype, device=self.device)
+        sphere_xy = self.sphere_x[step]
         sphere_vel = self.sphere_v[step]
 
         return sphere_vel / dt_
@@ -220,18 +249,6 @@ class Scene:
         self.p2g(step)
         self.grid_op(step)
         self.g2p(step)
-        pass
-
-
-def visualize(scene_: Scene):
-    for step in range(max_steps):
-        plt.clf()
-        plt.xlim(0, 1)
-        plt.ylim(0, 1)
-        plt.scatter(scene_.sphere_x[step][0], scene_.sphere_x[step][1], c='r', s=100)
-        plt.scatter(scene_.x[step][:, 0], scene_.x[step][:, 1], c='b', s=10)
-        plt.show()
-        # plt.pause(0.1)
 
 
 if __name__ == '__main__':
@@ -243,4 +260,9 @@ if __name__ == '__main__':
 
     print("Done.")
 
-    visualize(scene)
+    for s in range(max_steps - 1):
+        plt.clf()
+        plt.scatter(scene.x[s, :, 0].cpu().numpy(), scene.x[s, :, 1].cpu().numpy(), s=1)
+        plt.xlim(0, 1)
+        plt.ylim(0, 1)
+        plt.show()

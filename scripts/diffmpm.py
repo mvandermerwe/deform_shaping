@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 
 real = ti.f32
 ti.init(default_fp=real, arch=ti.gpu, flatten_if=True)
+# ti.init(default_fp=real, arch=ti.cpu, flatten_if=True, cpu_max_num_threads=1)
 
 dim = 2
 n_particles = 8192
@@ -21,13 +22,15 @@ E = 10
 # TODO: update
 mu = E
 la = E
-max_steps = 2048
+max_steps = 10
 steps = 1024
 gravity = 0.0
 target = [0.8, 0.2]
 
-sphere_start_pos = [0.4, 0.2]
-sphere_end_pos = [0.6, 0.15]
+sphere_start_pos = [0.5, 0.2]
+sphere_end_pos = [0.5, 0.15]
+# sphere_start_pos = [0.4, 0.2]
+# sphere_end_pos = [0.6, 0.15]
 sphere_radius = 0.05
 
 scalar = lambda: ti.field(dtype=real)
@@ -96,22 +99,30 @@ def clear_particle_grad():
 def p2g(f: ti.i32):
     for p in range(n_particles):
         base = ti.cast(x[f, p] * inv_dx - 0.5, ti.i32)
+        # print("base:", base)
         fx = x[f, p] * inv_dx - ti.cast(base, ti.i32)
+        # print("fx", fx)
         w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1) ** 2, 0.5 * (fx - 0.5) ** 2]
+        # print("w", w)
         new_F = (ti.Matrix.diag(dim=2, val=1) + dt * C[f, p]) @ F[f, p]
+        # print("new_F", new_F)
         J = (new_F).determinant()
+        # print("J", J)
+
         if particle_type[p] == 0:  # fluid
             sqrtJ = ti.sqrt(J)
             new_F = ti.Matrix([[sqrtJ, 0], [0, sqrtJ]])
 
         F[f + 1, p] = new_F
         r, s = ti.polar_decompose(new_F)
+        # print("r", r)
+        # print("s", s)
 
         act_id = actuator_id[p]
 
         # act = actuation[f, ti.max(0, act_id)] * act_strength
         act = 0.0
-        # ti.print(act)
+        # ti.#print(act)
 
         A = ti.Matrix([[0.0, 0.0], [0.0, 1.0]]) * act
         cauchy = ti.Matrix([[0.0, 0.0], [0.0, 0.0]])
@@ -121,11 +132,18 @@ def p2g(f: ti.i32):
             cauchy = ti.Matrix([[1.0, 0.0], [0.0, 0.1]]) * (J - 1) * E
         else:
             mass = 1
-            cauchy = 2 * mu * (new_F - r) @ new_F.transpose() + \
-                     ti.Matrix.diag(2, la * (J - 1) * J)
+            cauchy_add = ti.Matrix.diag(2, la * (J - 1) * J)
+            # print("cauchy_add", cauchy_add)
+            cauchy = 2 * mu * (new_F - r) @ new_F.transpose() + cauchy_add
+            # print("cauchy_in", cauchy)
         cauchy += new_F @ A @ new_F.transpose()
         stress = -(dt * p_vol * 4 * inv_dx * inv_dx) * cauchy
         affine = stress + mass * C[f, p]
+
+        # print("cauchy", cauchy)
+        # print("stress", stress)
+        # print("affine", affine)
+
         for i in ti.static(range(3)):
             for j in ti.static(range(3)):
                 offset = ti.Vector([i, j])
@@ -288,6 +306,7 @@ def advance(s):
     p2g(s)
     grid_op(s)
     g2p(s)
+    pass
 
 
 @ti.ad.grad_for(advance)
@@ -403,7 +422,7 @@ def main():
 
     # visualize
     forward(max_steps)
-    for s in range(15, max_steps, 16):
+    for s in range(0, max_steps, 1):
         visualize(s, 'diffmpm/iter{:03d}/'.format(0))
 
     # losses = []
