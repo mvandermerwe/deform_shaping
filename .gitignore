@@ -1,1 +1,3 @@
 diffmpm/
+*__pycache__
+*.egg-info
