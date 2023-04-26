@@ -27,7 +27,7 @@ steps = 1024
 gravity = 0.0
 target = [0.8, 0.2]
 
-sphere_start_pos = [0.5, 0.2]
+sphere_start_pos = [0.5, 0.17]
 sphere_end_pos = [0.5, 0.15]
 # sphere_start_pos = [0.4, 0.2]
 # sphere_end_pos = [0.6, 0.15]
@@ -197,17 +197,23 @@ def length(x_):
 @ti.func
 def collide(f, grid_pos, v_out, dt):
     dist = sdf(f, grid_pos)
+    # print("dist", dist)
     influence = ti.min(ti.exp(-dist * softness), 1)
+    # print("influence", influence)
     if (softness > 0 and influence > 0.1) or dist <= 0:
         D = normal(f, grid_pos)
+        # print("D", D)
         collider_v_at_grid = collider_v(f, grid_pos, dt)
+        # print("collider_v_at_grid", collider_v_at_grid)
 
         input_v = v_out - collider_v_at_grid
         normal_component = input_v.dot(D)
 
         grid_v_t = input_v - ti.min(normal_component, 0) * D
+        # print("grid_v_t", grid_v_t)
 
         grid_v_t_norm = length(grid_v_t)
+        # print("grid_v_t_norm", grid_v_t_norm)
         grid_v_t_friction = grid_v_t / grid_v_t_norm * ti.max(0, grid_v_t_norm + normal_component * friction)
         flag = ti.cast(normal_component < 0 and ti.sqrt(grid_v_t.dot(grid_v_t)) > 1e-30, ti.f32)
         grid_v_t = grid_v_t_friction * flag + grid_v_t * (1 - flag)
@@ -223,13 +229,15 @@ def collide(f, grid_pos, v_out, dt):
 
 @ti.kernel
 def grid_op(s: ti.i32):
-    # TODO: Add rigid body collision.
     for i, j in grid_m_in:
         inv_m = 1 / (grid_m_in[i, j] + 1e-10)
         v_out = inv_m * grid_v_in[i, j]
         v_out[1] -= dt * gravity
 
+        # print("v_out (pre-collide)", v_out)
+
         v_out = collide(s, ti.Vector([i, j]), v_out, dt)
+        # print("v_out (post-collide)", v_out)
 
         if i < bound and v_out[0] < 0:
             v_out[0] = 0
@@ -260,6 +268,8 @@ def grid_op(s: ti.i32):
             v_out[0] = 0
             v_out[1] = 0
 
+        # print("v_out (final)", v_out)
+
         grid_v_out[i, j] = v_out
 
 
@@ -267,10 +277,15 @@ def grid_op(s: ti.i32):
 def g2p(f: ti.i32):
     for p in range(n_particles):
         base = ti.cast(x[f, p] * inv_dx - 0.5, ti.i32)
+        # print("base", base)
         fx = x[f, p] * inv_dx - ti.cast(base, real)
+        # print("fx", fx)
         w = [0.5 * (1.5 - fx) ** 2, 0.75 - (fx - 1.0) ** 2, 0.5 * (fx - 0.5) ** 2]
+        # print("w", w)
         new_v = ti.Vector([0.0, 0.0])
+        # print("new_v", new_v)
         new_C = ti.Matrix([[0.0, 0.0], [0.0, 0.0]])
+        # print("new_C", new_C)
 
         for i in ti.static(range(3)):
             for j in ti.static(range(3)):
@@ -281,8 +296,11 @@ def g2p(f: ti.i32):
                 new_C += 4 * weight * g_v.outer_product(dpos) * inv_dx
 
         v[f + 1, p] = new_v
+        # print("new_v", new_v)
         x[f + 1, p] = x[f, p] + dt * v[f + 1, p]
+        # print("x", x[f + 1, p])
         C[f + 1, p] = new_C
+        # print("new_C", new_C)
 
 
 @ti.kernel
@@ -418,7 +436,7 @@ def main():
 
     for i in range(max_steps):
         sphere_pos[i] = sphere_position(i, max_steps)
-        sphere_vel[i] = (np.array(sphere_end_pos) - np.array(sphere_start_pos)) / max_steps
+        sphere_vel[i] = (np.array(sphere_end_pos) - np.array(sphere_start_pos)) / (max_steps - 1)
 
     # visualize
     forward(max_steps)

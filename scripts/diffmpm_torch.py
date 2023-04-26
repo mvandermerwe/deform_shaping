@@ -43,8 +43,8 @@ class Scene:
         self.dtype = torch.float32
         self.device = torch.device("cpu")
 
-        self.sphere_start_pos = torch.tensor([0.5, 0.2], dtype=self.dtype, device=self.device)
-        self.sphere_end_pos = torch.tensor([0.5, 0.3], dtype=self.dtype, device=self.device)
+        self.sphere_start_pos = torch.tensor([0.5, 0.17], dtype=self.dtype, device=self.device)
+        self.sphere_end_pos = torch.tensor([0.5, 0.15], dtype=self.dtype, device=self.device)
 
         self.create_def_body()
         self.init_tensors()
@@ -86,7 +86,7 @@ class Scene:
         step_idx = torch.arange(max_steps, dtype=self.dtype, device=self.device)
         self.sphere_x[:, 0] = torch.lerp(self.sphere_start_pos[0], self.sphere_end_pos[0], step_idx / (max_steps - 1))
         self.sphere_x[:, 1] = torch.lerp(self.sphere_start_pos[1], self.sphere_end_pos[1], step_idx / (max_steps - 1))
-        self.sphere_v[:-1, :] = (self.sphere_x[1:] - self.sphere_x[:-1]) / dt
+        self.sphere_v[:] = (self.sphere_end_pos - self.sphere_start_pos) / (max_steps - 1)
 
     def clear_grid(self):
         self.grid_v_in.zero_()
@@ -146,11 +146,13 @@ class Scene:
             normal_component = input_v.dot(D)
 
             grid_v_t = input_v - min(normal_component, 0) * D
-
             grid_v_t_norm = torch.norm(grid_v_t)
-            grid_v_t_friction = grid_v_t / grid_v_t_norm * max(0, grid_v_t_norm + normal_component * friction)
-            flag = (normal_component < 0 and torch.sqrt(grid_v_t.dot(grid_v_t)) > 1e-30).float()
-            grid_v_t = grid_v_t_friction * flag + grid_v_t * (1 - flag)
+
+            if grid_v_t_norm > 1e-30:
+                grid_v_t_friction = grid_v_t / grid_v_t_norm * max(0, grid_v_t_norm + normal_component * friction)
+                flag = (normal_component < 0 and torch.sqrt(grid_v_t.dot(grid_v_t)) > 1e-30).float()
+                grid_v_t = grid_v_t_friction * flag + grid_v_t * (1 - flag)
+
             v_out = collider_v_at_grid + input_v * (1 - influence) + grid_v_t * influence
 
         return v_out
@@ -209,7 +211,7 @@ class Scene:
                     g_v = self.grid_v_out[base[0] + i, base[1] + j]
                     weight = w[i][0] * w[j][1]
                     new_v += weight * g_v
-                    new_C += 4 * weight * torch.ger(g_v, dpos) * inv_dx  # TODO: Check.
+                    new_C += 4 * weight * torch.outer(g_v, dpos) * inv_dx  # TODO: Check.
 
             self.v[step + 1, p] = new_v
             self.x[step + 1, p] = self.x[step, p] + dt * self.v[step + 1, p]
@@ -225,11 +227,12 @@ class Scene:
 
 def visualize(scene_: Scene):
     for step in range(max_steps):
-        plt.clf()
+        fig, ax = plt.subplots()
         plt.xlim(0, 1)
         plt.ylim(0, 1)
-        plt.scatter(scene_.sphere_x[step][0], scene_.sphere_x[step][1], c='r', s=100)
-        plt.scatter(scene_.x[step][:, 0], scene_.x[step][:, 1], c='b', s=10)
+        circle = plt.Circle((scene_.sphere_x[step][0], scene_.sphere_x[step][1]), sphere_radius, color='r')
+        ax.add_patch(circle)
+        plt.scatter(scene_.x[step][:, 0], scene_.x[step][:, 1], c='b', s=0.1)
         plt.show()
         # plt.pause(0.1)
 
