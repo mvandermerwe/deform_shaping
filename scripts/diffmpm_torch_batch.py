@@ -75,12 +75,21 @@ class SceneBatch:
         n_particles = self.x0.shape[0]
 
     def init_tensors(self):
-        self.x = torch.zeros([max_steps, n_particles, dim], dtype=self.dtype, device=self.device)
-        self.v = torch.zeros([max_steps, n_particles, dim], dtype=self.dtype, device=self.device)
-        self.C = torch.zeros([max_steps, n_particles, dim, dim], dtype=self.dtype, device=self.device)
-        self.F = torch.zeros([max_steps, n_particles, dim, dim], dtype=self.dtype, device=self.device)
+        # self.x = torch.zeros([max_steps, n_particles, dim], dtype=self.dtype, device=self.device)
+        # self.v = torch.zeros([max_steps, n_particles, dim], dtype=self.dtype, device=self.device)
+        # self.C = torch.zeros([max_steps, n_particles, dim, dim], dtype=self.dtype, device=self.device)
+        # self.F = torch.zeros([max_steps, n_particles, dim, dim], dtype=self.dtype, device=self.device)
         self.sphere_x = torch.zeros([max_steps, dim], dtype=self.dtype, device=self.device)
         self.sphere_v = torch.zeros([max_steps, dim], dtype=self.dtype, device=self.device)
+
+        self.x = [torch.zeros([n_particles, dim], dtype=self.dtype, device=self.device).requires_grad_(True) for _ in
+                  range(max_steps)]
+        self.v = [torch.zeros([n_particles, dim], dtype=self.dtype, device=self.device).requires_grad_(True) for _ in
+                  range(max_steps)]
+        self.C = [torch.zeros([n_particles, dim, dim], dtype=self.dtype, device=self.device).requires_grad_(True) for _
+                  in range(max_steps)]
+        self.F = [torch.zeros([n_particles, dim, dim], dtype=self.dtype, device=self.device).requires_grad_(True) for _
+                  in range(max_steps)]
 
         self.grid_v_in = torch.zeros([n_grid, n_grid, dim], dtype=self.dtype, device=self.device)
         self.grid_m_in = torch.zeros([n_grid, n_grid], dtype=self.dtype, device=self.device)
@@ -93,8 +102,9 @@ class SceneBatch:
         self.sphere_v[:] = (sphere_end_pos - self.sphere_start_pos) / ((max_steps - 1) * dt)
 
     def clear_grid(self):
-        self.grid_v_in.zero_()
-        self.grid_m_in.zero_()
+        self.grid_v_in = torch.zeros([n_grid, n_grid, dim], dtype=self.dtype, device=self.device)
+        self.grid_m_in = torch.zeros([n_grid, n_grid], dtype=self.dtype, device=self.device)
+        self.grid_v_out = torch.zeros([n_grid, n_grid, dim], dtype=self.dtype, device=self.device)
 
     def p2g(self, step):
         base = (self.x[step] * inv_dx - 0.5).floor().int()
@@ -107,7 +117,7 @@ class SceneBatch:
         J = new_F.det()
 
         self.F[step + 1] = new_F
-        r, s = utils.polar_decompose(new_F)
+        r, s = utils.polar_decompose2d(new_F)
 
         mass = 1
         cauchy = 2 * mu * (new_F - r) @ new_F.transpose(-1, -2)
@@ -177,11 +187,18 @@ class SceneBatch:
             torch.tensor(0, dtype=self.dtype, device=self.device), grid_v_t_norm + normal_component * friction)[:, :,
                                                                    None]
         flag = (normal_component < 0).float()
-        grid_v_t[norm_mask] = (grid_v_t_friction * flag[:, :, None] + grid_v_t * (1 - flag)[:, :, None])[norm_mask]
+        grid_v_t = (grid_v_t * (1.0 - norm_mask[:, :, None].float())) + (
+                (grid_v_t_friction * flag[:, :, None] + grid_v_t * (1 - flag)[:, :, None]) * norm_mask[:, :,
+                                                                                             None].float())
 
-        v_out[mask] = (collider_v_at_grid + input_v * (1 - influence)[:, :, None] + grid_v_t * influence[:, :, None])[
-            mask]
-        return v_out
+        v_out_new = (collider_v_at_grid + input_v * (1 - influence)[:, :, None] + grid_v_t * influence[:, :,
+                                                                                             None]) * mask.float()[:, :,
+                                                                                                      None] + v_out * (
+                                                                                                                              1.0 - mask.float())[
+                                                                                                                      :,
+                                                                                                                      :,
+                                                                                                                      None]
+        return v_out_new
 
     def grid_op(self, step):
         # Create grid of indices.
@@ -192,37 +209,37 @@ class SceneBatch:
 
         inv_m = 1 / (self.grid_m_in + eps)
         v_out = inv_m[:, :, None] * self.grid_v_in
-        v_out[:, :, 1] -= dt * gravity
 
-        v_out = self.collide(step, grid_pos, v_out, dt)
+        v_out_2 = self.collide(step, grid_pos, v_out, dt)
 
-        zero_mask = torch.logical_and(grid_pos[:, :, 0] < bound, v_out[:, :, 0] < 0)
+        zero_mask = torch.logical_and(grid_pos[:, :, 0] < bound, v_out_2[:, :, 0] < 0)
         zero_mask = torch.logical_or(zero_mask,
-                                     torch.logical_and(grid_pos[:, :, 0] > n_grid - bound, v_out[:, :, 0] > 0))
+                                     torch.logical_and(grid_pos[:, :, 0] > n_grid - bound, v_out_2[:, :, 0] > 0))
         zero_mask = torch.logical_or(zero_mask,
-                                     torch.logical_and(grid_pos[:, :, 1] > n_grid - bound, v_out[:, :, 1] > 0))
-        v_out[zero_mask, :] = 0
+                                     torch.logical_and(grid_pos[:, :, 1] > n_grid - bound, v_out_2[:, :, 1] > 0))
+        v_out_3 = v_out_2 * (1.0 - zero_mask.float())[:, :, None]
 
         # Friction.
-        friction_mask = torch.logical_and(grid_pos[:, :, 1] < bound, v_out[:, :, 1] < 0)
+        friction_mask = torch.logical_and(grid_pos[:, :, 1] < bound, v_out_3[:, :, 1] < 0)
         normal = torch.tensor([0, 1], dtype=self.dtype, device=self.device).unsqueeze(0).unsqueeze(0).repeat(n_grid,
                                                                                                              n_grid, 1)
-        lin = torch.einsum("ijk,ijk->ij", v_out, normal)
+        lin = torch.einsum("ijk,ijk->ij", v_out_3, normal)
         lin_mask = lin < 0
 
-        vit = v_out - lin[:, :, None] * normal
+        vit = v_out_3 - lin[:, :, None] * normal
         lit = torch.norm(vit, dim=-1) + 1e-10
 
         lit_mask = lit + coeff * lin <= 0
 
         zero_lit_mask = torch.logical_and(friction_mask, torch.logical_and(lin_mask, lit_mask))
-        v_out[zero_lit_mask, :] = 0
+        v_out_4 = v_out_3 * (1.0 - zero_lit_mask.float())[:, :, None]
 
         non_zero_lit_mask = torch.logical_and(friction_mask,
                                               torch.logical_and(lin_mask, torch.logical_not(lit_mask)))
-        v_out[non_zero_lit_mask] = ((1 + coeff * lin / lit)[:, :, None] * vit)[non_zero_lit_mask]
+        v_out_5 = ((1 + coeff * lin / lit)[:, :, None] * vit) * non_zero_lit_mask.float()[:, :, None] + \
+                  v_out_4 * (1.0 - non_zero_lit_mask.float())[:, :, None]
 
-        self.grid_v_out = v_out
+        self.grid_v_out = v_out_5
 
     def g2p(self, step):
         base = (self.x[step] * inv_dx - 0.5).floor().int()
@@ -231,8 +248,8 @@ class SceneBatch:
                        (0.75 - torch.pow(fx - 1, 2)).unsqueeze(1),
                        (0.5 * torch.pow(fx - 0.5, 2)).unsqueeze(1)], dim=1)
 
-        new_v = torch.zeros([n_particles, 2], dtype=self.dtype, device=self.device)
-        new_C = torch.zeros([n_particles, 2, 2], dtype=self.dtype, device=self.device)
+        new_v = torch.zeros([n_particles, 9, 2], dtype=self.dtype, device=self.device)
+        new_C = torch.zeros([n_particles, 9, 2, 2], dtype=self.dtype, device=self.device)
 
         for i in range(3):
             for j in range(3):
@@ -240,19 +257,18 @@ class SceneBatch:
                 g_v = self.grid_v_out[base[:, 0] + i, base[:, 1] + j]
                 weight = w[:, i, 0] * w[:, j, 1]
 
-                new_v += weight[:, None] * g_v
-                new_C += 4 * weight[:, None, None] * torch.einsum("bi,bj->bij", g_v, dpos) * inv_dx
+                new_v[:, 3 * i + j] = weight[:, None] * g_v
+                new_C[:, 3 * i + j] = 4 * weight[:, None, None] * torch.einsum("bi,bj->bij", g_v, dpos) * inv_dx
 
-        self.v[step + 1] = new_v
+        self.v[step + 1] = new_v.sum(dim=1)
         self.x[step + 1] = self.x[step] + dt * self.v[step + 1]
-        self.C[step + 1] = new_C
+        self.C[step + 1] = new_C.sum(dim=1)
 
     def advance(self, step):
         self.clear_grid()
         self.p2g(step)
         self.grid_op(step)
         self.g2p(step)
-        pass
 
 
 def visualize(scene_: SceneBatch):
@@ -264,10 +280,12 @@ def visualize(scene_: SceneBatch):
         ax.clear()
         plt.xlim(0.2, 0.8)
         plt.ylim(0.0, 0.6)
-        circle = plt.Circle((scene_.sphere_x.cpu().numpy()[step][0], scene_.sphere_x.cpu().numpy()[step][1]),
-                            sphere_radius, color='r')
+        circle = plt.Circle(
+            (scene_.sphere_x.detach().cpu().numpy()[step][0], scene_.sphere_x.detach().cpu().numpy()[step][1]),
+            sphere_radius, color='r')
         ax.add_patch(circle)
-        ax.scatter(scene_.x.cpu().numpy()[step][:, 0], scene_.x.cpu().numpy()[step][:, 1], c='b', s=0.1)
+        ax.scatter(scene_.x[step].detach().cpu().numpy()[:, 0], scene_.x[step].detach().cpu().numpy()[:, 1], c='b',
+                   s=0.1)
         ax.set_aspect("equal")
         # plt.savefig("diffmpm/batch/{}.png".format(step), dpi=150)
         fig.canvas.draw()
@@ -279,24 +297,41 @@ def visualize(scene_: SceneBatch):
     plt.close()
 
 
+def loss(scene: SceneBatch):
+    loss = -scene.x[-1][:, 0].max()
+    return loss
+
+
 if __name__ == '__main__':
     # initialization
     scene = SceneBatch()
 
-    sphere_end_pos = torch.tensor([0.5, 0.15], dtype=scene.dtype, device=scene.device)
-    scene.reset()
-    scene.init_sphere_tensors(sphere_end_pos)
+    if True:
+        sphere_end_pos = torch.tensor([0.5, 0.15], dtype=scene.dtype, device=scene.device).requires_grad_(True)
+        opt = torch.optim.Adam([sphere_end_pos], lr=1e-2)
 
-    for s in trange(max_steps - 1):
-        scene.advance(s)
+        for i in range(10):
+            scene.reset()
+            scene.init_sphere_tensors(sphere_end_pos)
 
-    visualize(scene)
+            for s in trange(max_steps - 1):
+                scene.advance(s)
 
-    # sphere_end_pos = torch.tensor([0.4, 0.15], dtype=scene.dtype, device=scene.device)
-    # scene.reset()
-    # scene.init_sphere_tensors(sphere_end_pos)
-    #
-    # for s in trange(max_steps - 1):
-    #     scene.advance(s)
-    #
-    # visualize(scene)
+            l = loss(scene)
+
+            opt.zero_grad()
+            l.backward()
+            opt.step()
+
+            print("step: {}, loss: {}, end_pos: {}".format(i, l.item(), sphere_end_pos.detach().cpu().numpy()))
+
+            visualize(scene)
+    else:
+        sphere_end_pos = torch.tensor([0.6, 0.15], dtype=scene.dtype, device=scene.device)
+        scene.reset()
+        scene.init_sphere_tensors(sphere_end_pos)
+
+        for s in trange(max_steps - 1):
+            scene.advance(s)
+
+        visualize(scene)
