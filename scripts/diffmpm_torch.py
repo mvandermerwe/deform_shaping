@@ -3,6 +3,7 @@ from matplotlib import pyplot as plt
 from tqdm import trange
 
 import deform_shaping.utils as utils
+from deform_shaping.scripts.diffmpm_torch_batch import SceneBatch
 
 dim = 2
 n_particles = 8192

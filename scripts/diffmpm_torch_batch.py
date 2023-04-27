@@ -17,7 +17,7 @@ E = 10
 # TODO: update
 mu = E
 la = E
-max_steps = 10
+max_steps = 1024
 steps = 1024
 gravity = 0.0
 target = [0.8, 0.2]
@@ -37,11 +37,12 @@ softness = 666.0  # From PlasticineLab
 friction = 2.0  # ?
 
 
-class Scene:
+class SceneBatch:
 
     def __init__(self):
         self.dtype = torch.float32
-        self.device = torch.device("cpu")
+        # self.device = torch.device("cpu")
+        self.device = torch.device("cuda:0")
 
         self.sphere_start_pos = torch.tensor([0.5, 0.17], dtype=self.dtype, device=self.device)
         self.sphere_end_pos = torch.tensor([0.5, 0.15], dtype=self.dtype, device=self.device)
@@ -113,14 +114,29 @@ class Scene:
         stress = -(dt * p_vol * 4 * inv_dx * inv_dx) * cauchy
         affine = stress + mass * self.C[step]
 
+        contr_idcs = torch.zeros([n_particles, 9, dim], dtype=torch.int64, device=self.device)
+        v_in_contr = torch.zeros([n_particles, 9, dim], dtype=self.dtype, device=self.device)
+        m_in_contr = torch.zeros([n_particles, 9], dtype=self.dtype, device=self.device)
         for i in range(3):
             for j in range(3):
                 offset = torch.tensor([i, j], dtype=self.dtype, device=self.device)
                 dpos = (offset - fx) * dx
                 weight = w[:, i, 0] * w[:, j, 1]
-                self.grid_v_in[base[:, 0] + i, base[:, 1] + j] += weight[:, None] * (
+
+                contr_idcs[:, i * 3 + j, :] = ((base + offset)[:, 0] * n_grid + (base + offset)[:, 1])[:, None]
+                v_in_contr[:, i * 3 + j] = weight[:, None] * (
                         mass * self.v[step] + (affine @ dpos.unsqueeze(-1)).squeeze(-1))
-                self.grid_m_in[base[:, 0] + i, base[:, 1] + j] += weight * mass
+                m_in_contr[:, i * 3 + j] = weight * mass
+                # self.grid_v_in[base[:, 0] + i, base[:, 1] + j] += weight[:, None] * (
+                #         mass * self.v[step] + (affine @ dpos.unsqueeze(-1)).squeeze(-1))
+                # self.grid_m_in[base[:, 0] + i, base[:, 1] + j] += weight * mass
+        contr_idcs = contr_idcs.reshape(n_particles * 9, dim)
+        v_in_contr = v_in_contr.reshape(n_particles * 9, dim)
+        m_in_contr = m_in_contr.reshape(n_particles * 9)
+        # Use scatter_add_ to add contributions to self.grid_v_in and self.grid_m_in
+        self.grid_v_in.reshape(n_grid ** 2, -1).scatter_add_(dim=0, index=contr_idcs, src=v_in_contr).reshape(n_grid,
+                                                                                                              n_grid, 2)
+        self.grid_m_in.flatten().scatter_add_(dim=0, index=contr_idcs[:, 0], src=m_in_contr).reshape(n_grid, n_grid)
 
     def sdf(self, step, grid_pos):
         grid_xy = grid_pos * dx
@@ -130,7 +146,7 @@ class Scene:
     def normal(self, step, grid_pos):
         grid_xy = grid_pos * dx
         sphere_xy = self.sphere_x[step]
-        return (grid_xy - sphere_xy) / torch.norm(grid_xy - sphere_xy)
+        return (grid_xy - sphere_xy) / torch.norm(grid_xy - sphere_xy, dim=-1)[:, :, None]
 
     def collider_v(self, step, grid_pos, dt_):
         sphere_vel = self.sphere_v[step]
@@ -236,21 +252,25 @@ class Scene:
         pass
 
 
-def visualize(scene_: Scene):
-    for step in range(max_steps):
+def visualize(scene_: SceneBatch):
+    for step in range(15, max_steps, 16):
         fig, ax = plt.subplots()
         plt.xlim(0, 1)
         plt.ylim(0, 1)
-        circle = plt.Circle((scene_.sphere_x[step][0], scene_.sphere_x[step][1]), sphere_radius, color='r')
+        circle = plt.Circle((scene_.sphere_x.cpu().numpy()[step][0], scene_.sphere_x.cpu().numpy()[step][1]),
+                            sphere_radius, color='r')
         ax.add_patch(circle)
-        plt.scatter(scene_.x[step][:, 0], scene_.x[step][:, 1], c='b', s=0.1)
-        plt.show()
+        plt.scatter(scene_.x.cpu().numpy()[step][:, 0], scene_.x.cpu().numpy()[step][:, 1], c='b', s=0.1)
+        ax.set_aspect("equal")
+        plt.savefig("diffmpm/batch/{}.png".format(step), dpi=300)
+        plt.close()
+        # plt.show()
         # plt.pause(0.1)
 
 
 if __name__ == '__main__':
     # initialization
-    scene = Scene()
+    scene = SceneBatch()
 
     for s in trange(max_steps - 1):
         scene.advance(s)

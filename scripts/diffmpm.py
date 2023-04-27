@@ -22,7 +22,7 @@ E = 10
 # TODO: update
 mu = E
 la = E
-max_steps = 10
+max_steps = 1024
 steps = 1024
 gravity = 0.0
 target = [0.8, 0.2]
@@ -411,7 +411,7 @@ def visualize(s, folder):
         color = 0x111111
         colors[i] = color
     gui.circles(pos=particles, color=colors, radius=1.5)
-    gui.line((0.05, 0.02), (0.95, 0.02), radius=3, color=0x0)
+    # gui.line((0.05, 0.02), (0.95, 0.02), radius=3, color=0x0)
 
     os.makedirs(folder, exist_ok=True)
     gui.show(f'{folder}/{s:04d}.png')
@@ -440,7 +440,7 @@ def main():
 
     # visualize
     forward(max_steps)
-    for s in range(0, max_steps, 1):
+    for s in range(15, max_steps, 16):
         visualize(s, 'diffmpm/iter{:03d}/'.format(0))
 
     # losses = []
