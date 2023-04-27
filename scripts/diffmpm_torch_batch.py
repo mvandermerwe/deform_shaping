@@ -1,8 +1,12 @@
+import os
+
+import numpy as np
 import torch
 from matplotlib import pyplot as plt
 from tqdm import trange
 
 import deform_shaping.utils as utils
+import mmint_utils
 
 dim = 2
 n_particles = 8192
@@ -271,7 +275,9 @@ class SceneBatch:
         self.g2p(step)
 
 
-def visualize(scene_: SceneBatch):
+def visualize(scene_: SceneBatch, out_dir: str = None, goal_x: torch.Tensor = None):
+    if out_dir is not None:
+        mmint_utils.make_dir(out_dir)
     plt.ion()
     fig, ax = plt.subplots()
 
@@ -286,8 +292,11 @@ def visualize(scene_: SceneBatch):
         ax.add_patch(circle)
         ax.scatter(scene_.x[step].detach().cpu().numpy()[:, 0], scene_.x[step].detach().cpu().numpy()[:, 1], c='b',
                    s=0.1)
+        if goal_x is not None:
+            ax.scatter(goal_x.cpu().numpy()[:, 0], goal_x.cpu().numpy()[:, 1], c='g', alpha=0.5, s=0.1)
         ax.set_aspect("equal")
-        # plt.savefig("diffmpm/batch/{}.png".format(step), dpi=150)
+        if out_dir is not None:
+            plt.savefig(os.path.join(out_dir, "{}.png".format(step)), dpi=150)
         fig.canvas.draw()
         fig.canvas.flush_events()
         # plt.close()
@@ -297,9 +306,9 @@ def visualize(scene_: SceneBatch):
     plt.close()
 
 
-def loss(scene: SceneBatch):
-    loss = -scene.x[-1][:, 0].max()
-    return loss
+def loss(scene_: SceneBatch, goal_x_: torch.Tensor):
+    loss_ = (scene_.x[-1] - goal_x_).norm(dim=-1).mean()
+    return loss_
 
 
 if __name__ == '__main__':
@@ -307,17 +316,23 @@ if __name__ == '__main__':
     scene = SceneBatch()
 
     if True:
+        goal_x = np.load("goal.npz")["goal"]
+        goal_x = torch.tensor(goal_x, dtype=scene.dtype, device=scene.device)
+
+        out_dir = "out/test_1/"
+        mmint_utils.make_dir(out_dir)
+
         sphere_end_pos = torch.tensor([0.5, 0.15], dtype=scene.dtype, device=scene.device).requires_grad_(True)
         opt = torch.optim.Adam([sphere_end_pos], lr=1e-2)
 
-        for i in range(10):
+        for i in trange(5):
             scene.reset()
             scene.init_sphere_tensors(sphere_end_pos)
 
-            for s in trange(max_steps - 1):
+            for s in range(max_steps - 1):
                 scene.advance(s)
 
-            l = loss(scene)
+            l = loss(scene, goal_x)
 
             opt.zero_grad()
             l.backward()
@@ -325,7 +340,8 @@ if __name__ == '__main__':
 
             print("step: {}, loss: {}, end_pos: {}".format(i, l.item(), sphere_end_pos.detach().cpu().numpy()))
 
-            visualize(scene)
+            if i % 10 == 0:
+                visualize(scene, os.path.join(out_dir, "iter_%d" % i), goal_x)
     else:
         sphere_end_pos = torch.tensor([0.6, 0.15], dtype=scene.dtype, device=scene.device)
         scene.reset()
@@ -333,5 +349,7 @@ if __name__ == '__main__':
 
         for s in trange(max_steps - 1):
             scene.advance(s)
+
+        np.savez("goal.npz", goal=scene.x[-1].detach().cpu().numpy())
 
         visualize(scene)
