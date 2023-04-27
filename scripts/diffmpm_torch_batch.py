@@ -44,12 +44,15 @@ class SceneBatch:
         # self.device = torch.device("cpu")
         self.device = torch.device("cuda:0")
 
-        self.sphere_start_pos = torch.tensor([0.4, 0.2], dtype=self.dtype, device=self.device)
-        self.sphere_end_pos = torch.tensor([0.6, 0.15], dtype=self.dtype, device=self.device)
-
         self.create_def_body()
+        self.reset()
+
+        self.sphere_start_pos = torch.tensor([0.5, 0.2], dtype=self.dtype, device=self.device)
+        self.sphere_end_pos = torch.tensor([0.6, 0.15], dtype=self.dtype, device=self.device)
+        self.init_sphere_tensors(self.sphere_end_pos)
+
+    def reset(self):
         self.init_tensors()
-        self.init_sphere_tensors()
         self.x[0] = self.x0
         self.F[0] = torch.eye(dim, dtype=self.dtype, device=self.device).repeat(n_particles, 1, 1)
 
@@ -83,11 +86,11 @@ class SceneBatch:
         self.grid_m_in = torch.zeros([n_grid, n_grid], dtype=self.dtype, device=self.device)
         self.grid_v_out = torch.zeros([n_grid, n_grid, dim], dtype=self.dtype, device=self.device)
 
-    def init_sphere_tensors(self):
+    def init_sphere_tensors(self, sphere_end_pos: torch.Tensor):
         step_idx = torch.arange(max_steps, dtype=self.dtype, device=self.device)
-        self.sphere_x[:, 0] = torch.lerp(self.sphere_start_pos[0], self.sphere_end_pos[0], step_idx / (max_steps - 1))
-        self.sphere_x[:, 1] = torch.lerp(self.sphere_start_pos[1], self.sphere_end_pos[1], step_idx / (max_steps - 1))
-        self.sphere_v[:] = (self.sphere_end_pos - self.sphere_start_pos) / (max_steps - 1)
+        self.sphere_x[:, 0] = torch.lerp(self.sphere_start_pos[0], sphere_end_pos[0], step_idx / (max_steps - 1))
+        self.sphere_x[:, 1] = torch.lerp(self.sphere_start_pos[1], sphere_end_pos[1], step_idx / (max_steps - 1))
+        self.sphere_v[:] = (sphere_end_pos - self.sphere_start_pos) / ((max_steps - 1) * dt)
 
     def clear_grid(self):
         self.grid_v_in.zero_()
@@ -151,7 +154,7 @@ class SceneBatch:
     def collider_v(self, step, grid_pos, dt_):
         sphere_vel = self.sphere_v[step]
 
-        return sphere_vel / dt_
+        return sphere_vel  # / dt_
 
     def collide(self, step, grid_pos, v_out, dt_):
         dist = self.sdf(step, grid_pos)
@@ -253,29 +256,47 @@ class SceneBatch:
 
 
 def visualize(scene_: SceneBatch):
+    plt.ion()
+    fig, ax = plt.subplots()
+
     for step in range(15, max_steps, 16):
         # for step in range(max_steps):
-        fig, ax = plt.subplots()
+        ax.clear()
         plt.xlim(0.2, 0.8)
         plt.ylim(0.0, 0.6)
         circle = plt.Circle((scene_.sphere_x.cpu().numpy()[step][0], scene_.sphere_x.cpu().numpy()[step][1]),
                             sphere_radius, color='r')
         ax.add_patch(circle)
-        plt.scatter(scene_.x.cpu().numpy()[step][:, 0], scene_.x.cpu().numpy()[step][:, 1], c='b', s=0.1)
+        ax.scatter(scene_.x.cpu().numpy()[step][:, 0], scene_.x.cpu().numpy()[step][:, 1], c='b', s=0.1)
         ax.set_aspect("equal")
-        plt.savefig("diffmpm/batch/{}.png".format(step), dpi=150)
-        plt.close()
+        # plt.savefig("diffmpm/batch/{}.png".format(step), dpi=150)
+        fig.canvas.draw()
+        fig.canvas.flush_events()
+        # plt.close()
         # plt.show()
-        # plt.pause(0.1)
+        plt.pause(0.1)
+
+    plt.close()
 
 
 if __name__ == '__main__':
     # initialization
     scene = SceneBatch()
 
+    sphere_end_pos = torch.tensor([0.5, 0.15], dtype=scene.dtype, device=scene.device)
+    scene.reset()
+    scene.init_sphere_tensors(sphere_end_pos)
+
     for s in trange(max_steps - 1):
         scene.advance(s)
 
-    print("Done.")
-
     visualize(scene)
+
+    # sphere_end_pos = torch.tensor([0.4, 0.15], dtype=scene.dtype, device=scene.device)
+    # scene.reset()
+    # scene.init_sphere_tensors(sphere_end_pos)
+    #
+    # for s in trange(max_steps - 1):
+    #     scene.advance(s)
+    #
+    # visualize(scene)
