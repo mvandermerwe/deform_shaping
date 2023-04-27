@@ -44,8 +44,8 @@ class SceneBatch:
         # self.device = torch.device("cpu")
         self.device = torch.device("cuda:0")
 
-        self.sphere_start_pos = torch.tensor([0.5, 0.17], dtype=self.dtype, device=self.device)
-        self.sphere_end_pos = torch.tensor([0.5, 0.15], dtype=self.dtype, device=self.device)
+        self.sphere_start_pos = torch.tensor([0.4, 0.2], dtype=self.dtype, device=self.device)
+        self.sphere_end_pos = torch.tensor([0.6, 0.15], dtype=self.dtype, device=self.device)
 
         self.create_def_body()
         self.init_tensors()
@@ -141,12 +141,12 @@ class SceneBatch:
     def sdf(self, step, grid_pos):
         grid_xy = grid_pos * dx
         sphere_xy = self.sphere_x[step]
-        return torch.norm(grid_xy - sphere_xy, dim=-1) - sphere_radius
+        return (torch.norm(grid_xy - sphere_xy, dim=-1) + 1e-8) - sphere_radius
 
     def normal(self, step, grid_pos):
         grid_xy = grid_pos * dx
         sphere_xy = self.sphere_x[step]
-        return (grid_xy - sphere_xy) / torch.norm(grid_xy - sphere_xy, dim=-1)[:, :, None]
+        return (grid_xy - sphere_xy) / (torch.norm(grid_xy - sphere_xy, dim=-1)[:, :, None] + 1e-8)
 
     def collider_v(self, step, grid_pos, dt_):
         sphere_vel = self.sphere_v[step]
@@ -167,7 +167,7 @@ class SceneBatch:
 
         grid_v_t = input_v - (torch.min(normal_component, torch.tensor(0.0, dtype=self.dtype, device=self.device))[:, :,
                               None] * D)
-        grid_v_t_norm = torch.norm(grid_v_t, dim=-1)
+        grid_v_t_norm = torch.norm(grid_v_t, dim=-1) + 1e-8
         norm_mask = grid_v_t_norm > 1e-30
 
         grid_v_t_friction = grid_v_t / grid_v_t_norm[:, :, None] * torch.max(
@@ -254,15 +254,16 @@ class SceneBatch:
 
 def visualize(scene_: SceneBatch):
     for step in range(15, max_steps, 16):
+        # for step in range(max_steps):
         fig, ax = plt.subplots()
-        plt.xlim(0, 1)
-        plt.ylim(0, 1)
+        plt.xlim(0.2, 0.8)
+        plt.ylim(0.0, 0.6)
         circle = plt.Circle((scene_.sphere_x.cpu().numpy()[step][0], scene_.sphere_x.cpu().numpy()[step][1]),
                             sphere_radius, color='r')
         ax.add_patch(circle)
         plt.scatter(scene_.x.cpu().numpy()[step][:, 0], scene_.x.cpu().numpy()[step][:, 1], c='b', s=0.1)
         ax.set_aspect("equal")
-        plt.savefig("diffmpm/batch/{}.png".format(step), dpi=300)
+        plt.savefig("diffmpm/batch/{}.png".format(step), dpi=150)
         plt.close()
         # plt.show()
         # plt.pause(0.1)

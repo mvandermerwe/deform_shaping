@@ -5,9 +5,11 @@ import math
 import numpy as np
 import matplotlib.pyplot as plt
 
+from diffmpm_torch_batch import SceneBatch
+
 real = ti.f32
-ti.init(default_fp=real, arch=ti.gpu, flatten_if=True)
-# ti.init(default_fp=real, arch=ti.cpu, flatten_if=True, cpu_max_num_threads=1)
+# ti.init(default_fp=real, arch=ti.gpu, flatten_if=True)
+ti.init(default_fp=real, arch=ti.cpu, flatten_if=True, cpu_max_num_threads=1)
 
 dim = 2
 n_particles = 8192
@@ -27,10 +29,12 @@ steps = 1024
 gravity = 0.0
 target = [0.8, 0.2]
 
-sphere_start_pos = [0.5, 0.17]
-sphere_end_pos = [0.5, 0.15]
-# sphere_start_pos = [0.4, 0.2]
-# sphere_end_pos = [0.6, 0.15]
+# sphere_start_pos = [0.5, 0.17]
+# sphere_end_pos = [0.5, 0.15]
+# sphere_start_pos = [0.4, 0.17]
+# sphere_end_pos = [0.405, 0.165]
+sphere_start_pos = [0.4, 0.2]
+sphere_end_pos = [0.6, 0.15]
 sphere_radius = 0.05
 
 scalar = lambda: ti.field(dtype=real)
@@ -176,11 +180,11 @@ def normal(f, grid_pos):
 
 @ti.func
 def collider_v(f, grid_pos, dt_):
-    grid_xy = ti.Vector([grid_pos[0] * dx, grid_pos[1] * dx])
-    sphere_xy = sphere_pos[f]
+    # grid_xy = ti.Vector([grid_pos[0] * dx, grid_pos[1] * dx])
+    # sphere_xy = sphere_pos[f]
     sphere_vel_ = sphere_vel[f]
 
-    rel_pos = grid_xy - sphere_xy
+    # rel_pos = grid_xy - sphere_xy
 
     # next_sphere_xy = sphere_xy + (sphere_vel_ * dt_)
     # next_rel_pos = next_sphere_xy + rel_pos
@@ -201,8 +205,10 @@ def collide(f, grid_pos, v_out, dt):
     influence = ti.min(ti.exp(-dist * softness), 1)
     # print("influence", influence)
     if (softness > 0 and influence > 0.1) or dist <= 0:
+        # print("grid_pos", grid_pos)
+
         D = normal(f, grid_pos)
-        # print("D", D)
+        # nprint("D", D)
         collider_v_at_grid = collider_v(f, grid_pos, dt)
         # print("collider_v_at_grid", collider_v_at_grid)
 
@@ -246,8 +252,11 @@ def grid_op(s: ti.i32):
             v_out[0] = 0
             v_out[1] = 0
         if j < bound and v_out[1] < 0:
-            v_out[0] = 0
-            v_out[1] = 0
+            # print("i, j", i, j)
+            # print("s", s)
+            # print("vout_start", v_out)
+            # v_out[0] = 0
+            # v_out[1] = 0
             normal = ti.Vector([0.0, 1.0])
             lsq = (normal ** 2).sum()
             if lsq > 0.5:
@@ -256,14 +265,20 @@ def grid_op(s: ti.i32):
                     v_out[1] = 0
                 else:  # Friction
                     lin = v_out.dot(normal)
+                    # print("lin", lin)
                     if lin < 0:
                         vit = v_out - lin * normal
+                        # print("vit", vit)
                         lit = vit.norm() + 1e-10
+                        # print("lit", lit)
                         if lit + coeff * lin <= 0:
+                            # print("zeroing inside friction: ", i, " ", j)
                             v_out[0] = 0
                             v_out[1] = 0
                         else:
+                            # print("non-zero inside friction: ", i, " ", j)
                             v_out = (1 + coeff * lin / lit) * vit
+                    # print("vout", v_out)
         if j > n_grid - bound and v_out[1] > 0:
             v_out[0] = 0
             v_out[1] = 0
@@ -319,12 +334,14 @@ def compute_loss():
 
 
 @ti.ad.grad_replaced
-def advance(s):
+def advance(s, scene_batch):
     clear_grid()
     p2g(s)
     grid_op(s)
     g2p(s)
-    pass
+    # scene_batch.advance(s)
+
+    # print("%d: %d" % (s, np.allclose(x.to_numpy()[s + 1], scene_batch.x.cpu().numpy()[s + 1])))
 
 
 @ti.ad.grad_for(advance)
@@ -338,10 +355,10 @@ def advance_grad(s):
     p2g.grad(s)
 
 
-def forward(total_steps=steps):
+def forward(total_steps, scene_batch):
     # simulation
     for s in range(total_steps - 1):
-        advance(s)
+        advance(s, scene_batch)
     x_avg[None] = [0, 0]
     compute_x_avg()
     compute_loss()
@@ -438,8 +455,11 @@ def main():
         sphere_pos[i] = sphere_position(i, max_steps)
         sphere_vel[i] = (np.array(sphere_end_pos) - np.array(sphere_start_pos)) / (max_steps - 1)
 
+    scene_batch = SceneBatch()
+
     # visualize
-    forward(max_steps)
+    forward(max_steps, scene_batch)
+    # for s in range(max_steps):
     for s in range(15, max_steps, 16):
         visualize(s, 'diffmpm/iter{:03d}/'.format(0))
 
