@@ -21,7 +21,7 @@ E = 10
 # TODO: update
 mu = E
 la = E
-max_steps = 1024
+max_steps = 1025
 steps = 1024
 gravity = 0.0
 target = [0.8, 0.2]
@@ -51,7 +51,7 @@ class SceneBatch:
         self.create_def_body()
         self.reset()
 
-        self.sphere_start_pos = torch.tensor([0.5, 0.2], dtype=self.dtype, device=self.device)
+        self.sphere_start_pos = torch.tensor([0.5, 0.17], dtype=self.dtype, device=self.device)
         self.sphere_end_pos = torch.tensor([0.6, 0.15], dtype=self.dtype, device=self.device)
         self.init_sphere_tensors(self.sphere_end_pos)
 
@@ -315,7 +315,7 @@ if __name__ == '__main__':
     # initialization
     scene = SceneBatch()
 
-    if True:
+    if False:
         goal_x = np.load("goal.npz")["goal"]
         goal_x = torch.tensor(goal_x, dtype=scene.dtype, device=scene.device)
 
@@ -342,8 +342,8 @@ if __name__ == '__main__':
 
             if i % 10 == 0:
                 visualize(scene, os.path.join(out_dir, "iter_%d" % i), goal_x)
-    else:
-        sphere_end_pos = torch.tensor([0.6, 0.15], dtype=scene.dtype, device=scene.device)
+    elif False:
+        sphere_end_pos = torch.tensor([0.5, 0.15], dtype=scene.dtype, device=scene.device)
         scene.reset()
         scene.init_sphere_tensors(sphere_end_pos)
 
@@ -351,5 +351,23 @@ if __name__ == '__main__':
             scene.advance(s)
 
         np.savez("goal.npz", goal=scene.x[-1].detach().cpu().numpy())
+
+        visualize(scene)
+    else:
+        sphere_end_pos = torch.tensor([0.5, 0.15], dtype=scene.dtype, device=scene.device)
+        scene.reset()
+        scene.init_sphere_tensors(sphere_end_pos)
+
+        for s in trange(max_steps - 1):
+            scene.advance(s)
+
+        mmint_utils.save_gzip_pickle({
+            "x": scene.x,
+            "v": scene.v,
+            "C": scene.C,
+            "F": scene.F,
+            "sphere_x": scene.sphere_x,
+            "sphere_v": scene.sphere_v,
+        }, "scene.pkl.gzip")
 
         visualize(scene)
