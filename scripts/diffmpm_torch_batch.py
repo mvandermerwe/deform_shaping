@@ -316,42 +316,46 @@ if __name__ == '__main__':
     # initialization
     scene = SceneBatch()
 
-    if False:
-        goal_x = np.load("goal.npz")["goal"]
-        goal_x = torch.tensor(goal_x, dtype=scene.dtype, device=scene.device)
-
-        out_dir = "out/test_2/"
+    if True:
+        out_dir = "out/final_test/"
         mmint_utils.make_dir(out_dir)
 
-        sphere_end_pos = torch.tensor([0.5, 0.15], dtype=scene.dtype, device=scene.device).requires_grad_(True)
-        opt = torch.optim.Adam([sphere_end_pos], lr=1e-2)
+        for goal_idx in range(5):
+            goal_x = np.load("goal_%d.npz" % goal_idx)["goal"]
+            goal_x = torch.tensor(goal_x, dtype=scene.dtype, device=scene.device)
 
-        for i in trange(30):
-            scene.reset()
-            scene.init_sphere_tensors(sphere_end_pos)
+            goal_out_dir = os.path.join(out_dir, "goal_%d" % goal_idx)
+            mmint_utils.make_dir(goal_out_dir)
 
-            for s in range(max_steps - 1):
-                scene.advance(s)
+            sphere_end_pos = torch.tensor([0.5, 0.15], dtype=scene.dtype, device=scene.device).requires_grad_(True)
+            opt = torch.optim.Adam([sphere_end_pos], lr=1e-2)
 
-            l = loss(scene, goal_x)
+            for i in trange(30):
+                scene.reset()
+                scene.init_sphere_tensors(sphere_end_pos)
 
-            opt.zero_grad()
-            l.backward()
-            opt.step()
+                for s in range(max_steps - 1):
+                    scene.advance(s)
 
-            mmint_utils.save_gzip_pickle({
-                "loss": l.item(),
-                "step": i,
-                "sphere_end_pos": sphere_end_pos.detach().cpu().numpy(),
-                "x": scene.x,
-            }, os.path.join(out_dir, "iter_%d.pkl" % i))
+                l = loss(scene, goal_x)
 
-            print("step: {}, loss: {}, end_pos: {}".format(i, l.item(), sphere_end_pos.detach().cpu().numpy()))
+                opt.zero_grad()
+                l.backward()
+                opt.step()
 
-            if i % 10 == 0:
-                visualize(scene, os.path.join(out_dir, "iter_%d" % i), goal_x)
-        visualize(scene, os.path.join(out_dir, "final"), goal_x)
-    elif True:
+                mmint_utils.save_gzip_pickle({
+                    "loss": l.item(),
+                    "step": i,
+                    "sphere_end_pos": sphere_end_pos.detach().cpu().numpy(),
+                    "x": scene.x,
+                }, os.path.join(goal_out_dir, "iter_%d.pkl" % i))
+
+                print("step: {}, loss: {}, end_pos: {}".format(i, l.item(), sphere_end_pos.detach().cpu().numpy()))
+
+                if i % 10 == 0:
+                    visualize(scene, os.path.join(goal_out_dir, "iter_%d" % i), goal_x)
+            visualize(scene, os.path.join(goal_out_dir, "final"), goal_x)
+    elif False:
         goal_poses = [
             [0.5, 0.15],
             [0.6, 0.15],
