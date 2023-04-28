@@ -2,3 +2,4 @@ diffmpm/
 *__pycache__
 *.egg-info
 out/
+scene.pkl.gzip
