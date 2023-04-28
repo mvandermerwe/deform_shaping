@@ -51,7 +51,7 @@ class SceneBatch:
         self.create_def_body()
         self.reset()
 
-        self.sphere_start_pos = torch.tensor([0.5, 0.17], dtype=self.dtype, device=self.device)
+        self.sphere_start_pos = torch.tensor([0.5, 0.2], dtype=self.dtype, device=self.device)
         self.sphere_end_pos = torch.tensor([0.6, 0.15], dtype=self.dtype, device=self.device)
         self.init_sphere_tensors(self.sphere_end_pos)
 
@@ -290,6 +290,7 @@ def visualize(scene_: SceneBatch, out_dir: str = None, goal_x: torch.Tensor = No
             (scene_.sphere_x.detach().cpu().numpy()[step][0], scene_.sphere_x.detach().cpu().numpy()[step][1]),
             sphere_radius, color='r')
         ax.add_patch(circle)
+        ax.plot([0.05, 0.95], [0.02, 0.02], color='black', linewidth=2)
         ax.scatter(scene_.x[step].detach().cpu().numpy()[:, 0], scene_.x[step].detach().cpu().numpy()[:, 1], c='b',
                    s=0.1)
         if goal_x is not None:
@@ -319,13 +320,13 @@ if __name__ == '__main__':
         goal_x = np.load("goal.npz")["goal"]
         goal_x = torch.tensor(goal_x, dtype=scene.dtype, device=scene.device)
 
-        out_dir = "out/test_1/"
+        out_dir = "out/test_2/"
         mmint_utils.make_dir(out_dir)
 
         sphere_end_pos = torch.tensor([0.5, 0.15], dtype=scene.dtype, device=scene.device).requires_grad_(True)
         opt = torch.optim.Adam([sphere_end_pos], lr=1e-2)
 
-        for i in trange(5):
+        for i in trange(30):
             scene.reset()
             scene.init_sphere_tensors(sphere_end_pos)
 
@@ -338,21 +339,38 @@ if __name__ == '__main__':
             l.backward()
             opt.step()
 
+            mmint_utils.save_gzip_pickle({
+                "loss": l.item(),
+                "step": i,
+                "sphere_end_pos": sphere_end_pos.detach().cpu().numpy(),
+                "x": scene.x,
+            }, os.path.join(out_dir, "iter_%d.pkl" % i))
+
             print("step: {}, loss: {}, end_pos: {}".format(i, l.item(), sphere_end_pos.detach().cpu().numpy()))
 
             if i % 10 == 0:
                 visualize(scene, os.path.join(out_dir, "iter_%d" % i), goal_x)
-    elif False:
-        sphere_end_pos = torch.tensor([0.5, 0.15], dtype=scene.dtype, device=scene.device)
-        scene.reset()
-        scene.init_sphere_tensors(sphere_end_pos)
+        visualize(scene, os.path.join(out_dir, "final"), goal_x)
+    elif True:
+        goal_poses = [
+            [0.5, 0.15],
+            [0.6, 0.15],
+            [0.4, 0.15],
+            [0.45, 0.13],
+            [0.55, 0.16],
+        ]
 
-        for s in trange(max_steps - 1):
-            scene.advance(s)
+        for goal_idx in range(len(goal_poses)):
+            sphere_end_pos = torch.tensor(goal_poses[goal_idx], dtype=scene.dtype, device=scene.device)
+            scene.reset()
+            scene.init_sphere_tensors(sphere_end_pos)
 
-        np.savez("goal.npz", goal=scene.x[-1].detach().cpu().numpy())
+            for s in trange(max_steps - 1):
+                scene.advance(s)
 
-        visualize(scene)
+            np.savez("goal_%d.npz" % goal_idx, goal=scene.x[-1].detach().cpu().numpy())
+
+            visualize(scene)
     else:
         sphere_end_pos = torch.tensor([0.5, 0.15], dtype=scene.dtype, device=scene.device)
         scene.reset()

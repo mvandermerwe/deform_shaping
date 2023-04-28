@@ -44,41 +44,64 @@ friction = 2.0  # ?
 
 class SceneBatchMultiShooting:
 
-    def __init__(self):
+    def __init__(self, N):
         self.dtype = torch.float32
         # self.device = torch.device("cpu")
         self.device = torch.device("cuda:0")
-        self.N = 16
+        self.N = N
         self.steps_per_shot = (max_steps // self.N) + 1
 
+        self.create_def_body()
         self.reset()
 
     def reset(self):
         self.init_tensors()
+
+        self.x[0][0] = self.x0
+        self.F[0][0] = torch.eye(dim, dtype=self.dtype, device=self.device).repeat([n_particles, 1, 1])
+
+    def create_def_body(self):
+        global n_particles
+
+        # Setup points of deformable body in scene.
+        w_count = int(body_w / dx) * 2
+        h_count = int(body_h / dx) * 2
+        real_dx = body_w / w_count
+        real_dy = body_h / h_count
+        x = []
+        for i in range(w_count):
+            for j in range(h_count):
+                x.append([
+                    x_base + (i + 0.5) * real_dx + x_offset,
+                    y_base + (j + 0.5) * real_dy + y_offset
+                ])
+        self.x0 = torch.tensor(x, dtype=self.dtype, device=self.device)
+        n_particles = self.x0.shape[0]
 
     def init_tensors(self):
         steps_per_shot = (max_steps // self.N) + 1
         self.sphere_x = torch.zeros([self.N, steps_per_shot, dim], dtype=self.dtype, device=self.device)
         self.sphere_v = torch.zeros([self.N, steps_per_shot, dim], dtype=self.dtype, device=self.device)
 
-        self.x = [torch.zeros([self.N, n_particles, dim], dtype=self.dtype, device=self.device).requires_grad_(True)
+        self.x = [torch.zeros([self.N, n_particles, dim], dtype=self.dtype, device=self.device)
                   for _ in range(steps_per_shot)]
-        self.v = [torch.zeros([self.N, n_particles, dim], dtype=self.dtype, device=self.device).requires_grad_(True)
+        self.v = [torch.zeros([self.N, n_particles, dim], dtype=self.dtype, device=self.device)
                   for _ in range(steps_per_shot)]
-        self.C = [torch.zeros([self.N, n_particles, dim, dim], dtype=self.dtype, device=self.device).requires_grad_(
-            True) for _ in range(steps_per_shot)]
-        self.F = [torch.zeros([self.N, n_particles, dim, dim], dtype=self.dtype, device=self.device).requires_grad_(
-            True) for _ in range(steps_per_shot)]
+        self.C = [torch.zeros([self.N, n_particles, dim, dim], dtype=self.dtype, device=self.device) for _ in
+                  range(steps_per_shot)]
+        self.F = [torch.zeros([self.N, n_particles, dim, dim], dtype=self.dtype, device=self.device) for _ in
+                  range(steps_per_shot)]
 
         self.grid_v_in = torch.zeros([self.N, n_grid, n_grid, dim], dtype=self.dtype, device=self.device)
         self.grid_m_in = torch.zeros([self.N, n_grid, n_grid], dtype=self.dtype, device=self.device)
         self.grid_v_out = torch.zeros([self.N, n_grid, n_grid, dim], dtype=self.dtype, device=self.device)
 
     def init_sphere_tensors(self, x_init, v_init, C_init, F_init, sphere_x_init):
-        self.x[0] = x_init
-        self.v[0] = v_init
-        self.C[0] = C_init
-        self.F[0] = F_init
+        if x_init is None:
+            self.x[0][1:] = x_init
+            self.v[0][1:] = v_init
+            self.C[0][1:] = C_init
+            self.F[0][1:] = F_init
 
         steps_per_shot = (max_steps // self.N) + 1
         step_idx = torch.arange(steps_per_shot, dtype=self.dtype, device=self.device)
@@ -272,8 +295,6 @@ def visualize(scene_: SceneBatchMultiShooting, out_dir: str = None, goal_x: torc
     plt.ion()
     fig, ax = plt.subplots()
 
-    sphere_x = scene_.sphere_x.detach().cpu().numpy().reshape(-1, 2)
-
     for step in range(15, max_steps, 16):
         shot_idx = int(step / (max_steps / scene_.N))
         in_shot_idx = int(step % (max_steps / scene_.N))
@@ -305,8 +326,18 @@ def visualize(scene_: SceneBatchMultiShooting, out_dir: str = None, goal_x: torc
 
 
 def loss(scene_: SceneBatchMultiShooting, goal_x_: torch.Tensor):
-    loss_ = (scene_.x[-1] - goal_x_).norm(dim=-1).mean()
-    return loss_
+    # Final pose loss.
+    final_loss_ = (scene_.x[-1][-1] - goal_x_).norm(dim=-1).mean()
+
+    # Defect constraints.
+    defect_loss_ = 0.0
+    for step_idx in range(scene_.N - 1):
+        defect_loss_ += (scene_.x[step_idx + 1][0] - scene_.x[step_idx][-1]).norm(dim=-1).mean()
+        defect_loss_ += (scene_.v[step_idx + 1][0] - scene_.v[step_idx][-1]).norm(dim=-1).mean()
+        defect_loss_ += (scene_.F[step_idx + 1][0] - scene_.F[step_idx][-1]).norm(dim=-1).mean()
+        defect_loss_ += (scene_.C[step_idx + 1][0] - scene_.C[step_idx][-1]).norm(dim=-1).mean()
+
+    return final_loss_ + defect_loss_
 
 
 def get_init_from_scene_dict(scene_: SceneBatchMultiShooting, scene_dict_: dict):
@@ -327,42 +358,66 @@ def get_init_from_scene_dict(scene_: SceneBatchMultiShooting, scene_dict_: dict)
     N = scene_.N
     steps_per_shot = max_steps // N
 
-    x_init = torch.zeros([N, n_particles, 2], dtype=dtype, device=device)
-    v_init = torch.zeros([N, n_particles, 2], dtype=dtype, device=device)
-    C_init = torch.zeros([N, n_particles, 2, 2], dtype=dtype, device=device)
-    F_init = torch.zeros([N, n_particles, 2, 2], dtype=dtype, device=device)
-    sphere_x_init = torch.zeros([N + 1, 2], dtype=dtype, device=device)
+    x_init = np.zeros([N - 1, n_particles, 2])
+    v_init = np.zeros([N - 1, n_particles, 2])
+    C_init = np.zeros([N - 1, n_particles, 2, 2])
+    F_init = np.zeros([N - 1, n_particles, 2, 2])
+    sphere_x_init = np.zeros([N + 1, 2])
 
-    for idx in range(N):
-        x_init[idx] = x_all[idx * steps_per_shot]
-        v_init[idx] = v_all[idx * steps_per_shot]
-        C_init[idx] = C_all[idx * steps_per_shot]
-        F_init[idx] = F_all[idx * steps_per_shot]
+    sphere_x_init[0] = sphere_x_all[0].detach().cpu().numpy()
+    for idx in range(1, N):
+        x_init[idx - 1] = x_all[idx * steps_per_shot].detach().cpu().numpy()
+        v_init[idx - 1] = v_all[idx * steps_per_shot].detach().cpu().numpy()
+        C_init[idx - 1] = C_all[idx * steps_per_shot].detach().cpu().numpy()
+        F_init[idx - 1] = F_all[idx * steps_per_shot].detach().cpu().numpy()
 
-        sphere_x_init[idx] = sphere_x_all[idx * steps_per_shot]
-    sphere_x_init[-1] = sphere_x_all[-1]
+        sphere_x_init[idx] = sphere_x_all[idx * steps_per_shot].detach().cpu().numpy()
+    sphere_x_init[-1] = sphere_x_all[-1].detach().cpu().numpy()
+
+    x_init = torch.tensor(x_init, dtype=dtype, device=device).requires_grad_(True)
+    v_init = torch.tensor(v_init, dtype=dtype, device=device).requires_grad_(True)
+    C_init = torch.tensor(C_init, dtype=dtype, device=device).requires_grad_(True)
+    F_init = torch.tensor(F_init, dtype=dtype, device=device).requires_grad_(True)
+    sphere_x_init = torch.tensor(sphere_x_init, dtype=dtype, device=device).requires_grad_(True)
 
     return x_init, v_init, C_init, F_init, sphere_x_init
 
 
 if __name__ == '__main__':
     # initialization
-    scene = SceneBatchMultiShooting()
+    scene = SceneBatchMultiShooting(16)
+    scene_vis = SceneBatchMultiShooting(1)
 
     # Load starting conditions for the sphere and deformable body.
     scene_dict = mmint_utils.load_gzip_pickle("scene.pkl.gzip")
     x_init_, v_init_, C_init_, F_init_, sphere_x_init_ = get_init_from_scene_dict(scene, scene_dict)
 
-    scene.reset()
-    scene.init_sphere_tensors(x_init_, v_init_, C_init_, F_init_, sphere_x_init_)
+    # Load goal.
+    goal_x = np.load("goal.npz")["goal"]
+    goal_x = torch.tensor(goal_x, dtype=scene.dtype, device=scene.device)
 
-    scene_check = SceneBatch()
-    sphere_end_pos = torch.tensor([0.5, 0.15], dtype=scene.dtype, device=scene.device)
-    scene_check.reset()
-    scene_check.init_sphere_tensors(sphere_end_pos)
+    opt = torch.optim.Adam([x_init_, v_init_, C_init_, F_init_, sphere_x_init_], lr=1e-2)
 
-    for s in trange(scene.steps_per_shot - 1):
-        scene.advance(s)
-        continue
+    for i in trange(1000):
+        scene.reset()
+        scene.init_sphere_tensors(x_init_, v_init_, C_init_, F_init_, sphere_x_init_)
 
-    visualize(scene)
+        for s in range(scene.steps_per_shot - 1):
+            scene.advance(s)
+
+        l_ = loss(scene, goal_x)
+
+        opt.zero_grad()
+        l_.backward()
+        opt.step()
+
+        print("step: {}, loss: {}".format(i, l_.item()))
+
+        if i % 100 == 0:
+            scene_vis.reset()
+            scene_vis.init_sphere_tensors(None, None, None, None, sphere_x_init_)
+
+            for s_vis in range(max_steps):
+                scene_vis.advance(s_vis)
+
+            visualize(scene, goal_x=goal_x)
