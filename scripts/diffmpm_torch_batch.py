@@ -318,7 +318,33 @@ if __name__ == '__main__':
     # initialization
     scene = SceneBatch()
 
-    if False:
+    if True:
+        goal_x = np.load("goal_1.npz")["goal"]
+        goal_x = torch.tensor(goal_x, dtype=scene.dtype, device=scene.device)
+
+        sphere_end_pos = torch.tensor([0.5, 0.15], dtype=scene.dtype, device=scene.device).requires_grad_(True)
+        opt = torch.optim.Adam([sphere_end_pos], lr=1e-2)
+
+        start = time.time()
+        for i in trange(30):
+            scene.reset()
+            scene.init_sphere_tensors(sphere_end_pos)
+
+            for s in range(max_steps - 1):
+                scene.advance(s)
+
+            l = loss(scene, goal_x)
+
+            opt.zero_grad()
+            l.backward()
+            opt.step()
+
+            print("step: {}, loss: {}, end_pos: {}".format(i, l.item(), sphere_end_pos.detach().cpu().numpy()))
+
+            if i % 10 == 0:
+                visualize(scene, goal_x=goal_x)
+        visualize(scene, goal_x=goal_x)
+    elif False:
         out_dir = "out/in_variation/"
         mmint_utils.make_dir(out_dir)
 
@@ -361,7 +387,7 @@ if __name__ == '__main__':
                 if i % 10 == 0:
                     visualize(scene, os.path.join(goal_out_dir, "iter_%d" % i), goal_x)
             visualize(scene, os.path.join(goal_out_dir, "final"), goal_x)
-    elif True:
+    elif False:
         out_dir = "out/final_test_timing/"
         mmint_utils.make_dir(out_dir)
 
