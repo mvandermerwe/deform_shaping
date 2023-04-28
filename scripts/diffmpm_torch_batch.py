@@ -1,4 +1,5 @@
 import os
+import time
 
 import numpy as np
 import torch
@@ -284,6 +285,7 @@ def visualize(scene_: SceneBatch, out_dir: str = None, goal_x: torch.Tensor = No
     for step in range(15, max_steps, 16):
         # for step in range(max_steps):
         ax.clear()
+        ax.axis("off")
         plt.xlim(0.2, 0.8)
         plt.ylim(0.0, 0.6)
         circle = plt.Circle(
@@ -316,18 +318,22 @@ if __name__ == '__main__':
     # initialization
     scene = SceneBatch()
 
-    if True:
-        out_dir = "out/final_test/"
+    if False:
+        out_dir = "out/in_variation/"
         mmint_utils.make_dir(out_dir)
 
-        for goal_idx in range(5):
-            goal_x = np.load("goal_%d.npz" % goal_idx)["goal"]
-            goal_x = torch.tensor(goal_x, dtype=scene.dtype, device=scene.device)
+        goal_x = np.load("goal_1.npz")["goal"]
+        goal_x = torch.tensor(goal_x, dtype=scene.dtype, device=scene.device)
 
-            goal_out_dir = os.path.join(out_dir, "goal_%d" % goal_idx)
+        init_goals = [[0.5, 0.15], [0.4, 0.15], [0.6, 0.17], [0.5, 0.2]]
+
+        for init_goal_idx in range(3, len(init_goals)):
+            init_goal = init_goals[init_goal_idx]
+            sphere_end_pos = torch.tensor(init_goal, dtype=scene.dtype, device=scene.device).requires_grad_(True)
+
+            goal_out_dir = os.path.join(out_dir, "goal_%d" % init_goal_idx)
             mmint_utils.make_dir(goal_out_dir)
 
-            sphere_end_pos = torch.tensor([0.5, 0.15], dtype=scene.dtype, device=scene.device).requires_grad_(True)
             opt = torch.optim.Adam([sphere_end_pos], lr=1e-2)
 
             for i in trange(30):
@@ -355,6 +361,48 @@ if __name__ == '__main__':
                 if i % 10 == 0:
                     visualize(scene, os.path.join(goal_out_dir, "iter_%d" % i), goal_x)
             visualize(scene, os.path.join(goal_out_dir, "final"), goal_x)
+    elif True:
+        out_dir = "out/final_test_timing/"
+        mmint_utils.make_dir(out_dir)
+
+        for goal_idx in range(1, 5):
+            goal_x = np.load("goal_%d.npz" % goal_idx)["goal"]
+            goal_x = torch.tensor(goal_x, dtype=scene.dtype, device=scene.device)
+
+            goal_out_dir = os.path.join(out_dir, "goal_%d" % goal_idx)
+            mmint_utils.make_dir(goal_out_dir)
+
+            sphere_end_pos = torch.tensor([0.5, 0.15], dtype=scene.dtype, device=scene.device).requires_grad_(True)
+            opt = torch.optim.Adam([sphere_end_pos], lr=1e-2)
+
+            start = time.time()
+            for i in trange(30):
+                scene.reset()
+                scene.init_sphere_tensors(sphere_end_pos)
+
+                for s in range(max_steps - 1):
+                    scene.advance(s)
+
+                l = loss(scene, goal_x)
+
+                opt.zero_grad()
+                l.backward()
+                opt.step()
+
+                # mmint_utils.save_gzip_pickle({
+                #     "loss": l.item(),
+                #     "step": i,
+                #     "sphere_end_pos": sphere_end_pos.detach().cpu().numpy(),
+                #     "x": scene.x,
+                # }, os.path.join(goal_out_dir, "iter_%d.pkl" % i))
+                #
+                # print("step: {}, loss: {}, end_pos: {}".format(i, l.item(), sphere_end_pos.detach().cpu().numpy()))
+                #
+                # if i % 10 == 0:
+                #     visualize(scene, os.path.join(goal_out_dir, "iter_%d" % i), goal_x)
+            # visualize(scene, os.path.join(goal_out_dir, "final"), goal_x)
+            end = time.time()
+            print("goal %d: %f" % (goal_idx, end - start))
     elif False:
         goal_poses = [
             [0.5, 0.15],
@@ -364,7 +412,13 @@ if __name__ == '__main__':
             [0.55, 0.16],
         ]
 
+        out_dir = "out/final_goals/"
+        mmint_utils.make_dir(out_dir)
+
         for goal_idx in range(len(goal_poses)):
+            goal_out_dir = os.path.join(out_dir, "goal_%d" % goal_idx)
+            mmint_utils.make_dir(goal_out_dir)
+
             sphere_end_pos = torch.tensor(goal_poses[goal_idx], dtype=scene.dtype, device=scene.device)
             scene.reset()
             scene.init_sphere_tensors(sphere_end_pos)
@@ -374,7 +428,7 @@ if __name__ == '__main__':
 
             np.savez("goal_%d.npz" % goal_idx, goal=scene.x[-1].detach().cpu().numpy())
 
-            visualize(scene)
+            visualize(scene, goal_out_dir)
     else:
         sphere_end_pos = torch.tensor([0.5, 0.15], dtype=scene.dtype, device=scene.device)
         scene.reset()
