@@ -318,7 +318,7 @@ if __name__ == '__main__':
     # initialization
     scene = SceneBatch()
 
-    if False:
+    if True:
         goal_x = np.load("goal_1.npz")["goal"]
         goal_x = torch.tensor(goal_x, dtype=scene.dtype, device=scene.device)
 
@@ -387,7 +387,7 @@ if __name__ == '__main__':
                 if i % 10 == 0:
                     visualize(scene, os.path.join(goal_out_dir, "iter_%d" % i), goal_x)
             visualize(scene, os.path.join(goal_out_dir, "final"), goal_x)
-    elif True:
+    elif False:
         out_dir = "out/final_test_fix/"
         mmint_utils.make_dir(out_dir)
 
