@@ -318,7 +318,7 @@ if __name__ == '__main__':
     # initialization
     scene = SceneBatch()
 
-    if True:
+    if False:
         goal_x = np.load("goal_1.npz")["goal"]
         goal_x = torch.tensor(goal_x, dtype=scene.dtype, device=scene.device)
 
@@ -387,8 +387,8 @@ if __name__ == '__main__':
                 if i % 10 == 0:
                     visualize(scene, os.path.join(goal_out_dir, "iter_%d" % i), goal_x)
             visualize(scene, os.path.join(goal_out_dir, "final"), goal_x)
-    elif False:
-        out_dir = "out/final_test_timing/"
+    elif True:
+        out_dir = "out/final_test_fix/"
         mmint_utils.make_dir(out_dir)
 
         for goal_idx in range(1, 5):
@@ -415,18 +415,18 @@ if __name__ == '__main__':
                 l.backward()
                 opt.step()
 
-                # mmint_utils.save_gzip_pickle({
-                #     "loss": l.item(),
-                #     "step": i,
-                #     "sphere_end_pos": sphere_end_pos.detach().cpu().numpy(),
-                #     "x": scene.x,
-                # }, os.path.join(goal_out_dir, "iter_%d.pkl" % i))
-                #
-                # print("step: {}, loss: {}, end_pos: {}".format(i, l.item(), sphere_end_pos.detach().cpu().numpy()))
-                #
-                # if i % 10 == 0:
-                #     visualize(scene, os.path.join(goal_out_dir, "iter_%d" % i), goal_x)
-            # visualize(scene, os.path.join(goal_out_dir, "final"), goal_x)
+                mmint_utils.save_gzip_pickle({
+                    "loss": l.item(),
+                    "step": i,
+                    "sphere_end_pos": sphere_end_pos.detach().cpu().numpy(),
+                    "x": scene.x,
+                }, os.path.join(goal_out_dir, "iter_%d.pkl" % i))
+
+                print("step: {}, loss: {}, end_pos: {}".format(i, l.item(), sphere_end_pos.detach().cpu().numpy()))
+
+                if i % 10 == 0:
+                    visualize(scene, os.path.join(goal_out_dir, "iter_%d" % i), goal_x)
+            visualize(scene, os.path.join(goal_out_dir, "final"), goal_x)
             end = time.time()
             print("goal %d: %f" % (goal_idx, end - start))
     elif False:
